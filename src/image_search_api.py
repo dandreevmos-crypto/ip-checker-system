@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Модуль автоматического поиска изображений в интернете
-Поддерживает: SerpAPI (Google/Yandex), TinEye API, прямой поиск
+Поддерживает: Serper.dev (рекомендуется), SerpAPI (Google/Yandex), TinEye API, прямой поиск
+
+Рекомендуемый API: Serper.dev
+- 2500 бесплатных запросов при регистрации
+- $0.30 за 1000 запросов (в 10 раз дешевле SerpAPI)
+- Поддержка Google Reverse Image Search
+- https://serper.dev/
 """
 
 import os
@@ -19,6 +25,228 @@ from PIL import Image
 
 from config import API_KEYS, IMAGE_SEARCH_RESOURCES
 from models import ImageSearchResult, RiskLevel
+
+
+class SerperImageSearch:
+    """
+    Поиск изображений через Serper.dev API (РЕКОМЕНДУЕТСЯ)
+
+    Преимущества:
+    - 2500 бесплатных запросов при регистрации
+    - $0.30 за 1000 запросов (в 10 раз дешевле SerpAPI)
+    - Быстрый и надёжный API
+
+    Регистрация: https://serper.dev/
+    """
+
+    API_URL = "https://google.serper.dev/images"
+    LENS_URL = "https://google.serper.dev/lens"
+
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or API_KEYS.get("serper", os.environ.get("SERPER_API_KEY", ""))
+        self.session = requests.Session()
+        if self.api_key:
+            self.session.headers.update({
+                "X-API-KEY": self.api_key,
+                "Content-Type": "application/json"
+            })
+
+    def search_by_image(self, image_path: str) -> ImageSearchResult:
+        """
+        Обратный поиск изображения через Google Lens (Serper)
+        """
+        result = ImageSearchResult(
+            resource_name="Google Images (Serper.dev)",
+            resource_url="https://images.google.com"
+        )
+
+        if not self.api_key:
+            result.notes = "Serper API ключ не настроен. Получите бесплатный ключ на https://serper.dev/"
+            result.status = RiskLevel.YELLOW
+            return result
+
+        try:
+            # Читаем изображение и кодируем в base64
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+
+            # Определяем MIME-тип
+            ext = Path(image_path).suffix.lower()
+            mime_types = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp'
+            }
+            mime_type = mime_types.get(ext, 'image/jpeg')
+
+            # Формируем data URL для Google Lens API
+            data_url = f"data:{mime_type};base64,{image_data}"
+
+            # Запрос к Serper Lens API
+            payload = {
+                "url": data_url,
+                "gl": "ru",  # Регион - Россия
+                "hl": "ru"   # Язык - русский
+            }
+
+            response = self.session.post(
+                self.LENS_URL,
+                json=payload,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                self._parse_lens_results(result, data)
+            elif response.status_code == 401:
+                result.notes = "Неверный API ключ Serper. Проверьте ключ на https://serper.dev/"
+                result.status = RiskLevel.YELLOW
+            elif response.status_code == 429:
+                result.notes = "Превышен лимит запросов Serper API. Попробуйте позже."
+                result.status = RiskLevel.YELLOW
+            else:
+                result.notes = f"Ошибка Serper API: {response.status_code} - {response.text[:200]}"
+                result.status = RiskLevel.YELLOW
+
+        except requests.exceptions.Timeout:
+            result.notes = "Таймаут запроса к Serper API"
+            result.status = RiskLevel.YELLOW
+        except Exception as e:
+            result.notes = f"Ошибка поиска: {str(e)}"
+            result.status = RiskLevel.YELLOW
+
+        return result
+
+    def _parse_lens_results(self, result: ImageSearchResult, data: Dict):
+        """Парсинг результатов Google Lens через Serper"""
+
+        # Визуальные совпадения
+        visual_matches = data.get("visual_matches", [])
+        # Точные совпадения изображения
+        exact_matches = data.get("exact_matches", [])
+        # Похожие изображения
+        similar_images = data.get("similar_images", [])
+        # Источники знаний (бренды, продукты)
+        knowledge_graph = data.get("knowledgeGraph", {})
+
+        result.total_results = len(visual_matches) + len(exact_matches) + len(similar_images)
+        result.exact_matches = len(exact_matches)
+
+        # Собираем все найденные источники
+        for match in exact_matches[:5]:
+            source_url = match.get("link", match.get("url", ""))
+            if source_url:
+                result.known_sources.append(source_url)
+            result.similar_images.append({
+                "title": match.get("title", ""),
+                "link": source_url,
+                "source": match.get("source", match.get("domain", "")),
+                "thumbnail": match.get("thumbnail", match.get("imageUrl", ""))
+            })
+
+        for match in visual_matches[:10]:
+            result.similar_images.append({
+                "title": match.get("title", ""),
+                "link": match.get("link", ""),
+                "source": match.get("source", ""),
+                "thumbnail": match.get("thumbnail", ""),
+                "position": match.get("position", 0)
+            })
+
+        # Проверяем Knowledge Graph на известные бренды
+        detected_brands = []
+        if knowledge_graph:
+            title = knowledge_graph.get("title", "").lower()
+            description = knowledge_graph.get("description", "").lower()
+
+            # Список известных брендов для проверки
+            brand_keywords = [
+                'nike', 'adidas', 'puma', 'gucci', 'chanel', 'louis vuitton',
+                'supreme', 'versace', 'prada', 'dior', 'balenciaga', 'hermes',
+                'burberry', 'fendi', 'off-white', 'givenchy', 'valentino'
+            ]
+
+            for brand in brand_keywords:
+                if brand in title or brand in description:
+                    detected_brands.append(brand.upper())
+
+        # Определяем статус
+        if result.exact_matches > 0:
+            result.status = RiskLevel.RED
+            result.notes = f"⚠️ ВНИМАНИЕ! Найдено {result.exact_matches} точных совпадений изображения в интернете!"
+            if detected_brands:
+                result.notes += f" Обнаружены бренды: {', '.join(detected_brands)}"
+        elif detected_brands:
+            result.status = RiskLevel.RED
+            result.notes = f"⚠️ Обнаружены известные бренды: {', '.join(detected_brands)}"
+        elif len(visual_matches) > 10:
+            result.status = RiskLevel.YELLOW
+            result.notes = f"Найдено {len(visual_matches)} визуальных совпадений. Рекомендуется проверка."
+        elif len(visual_matches) > 0:
+            result.status = RiskLevel.YELLOW
+            result.notes = f"Найдено {len(visual_matches)} похожих изображений. Проверьте источники."
+        else:
+            result.status = RiskLevel.GREEN
+            result.notes = "Похожих изображений не найдено в Google."
+
+        # Добавляем информацию о knowledge graph
+        if knowledge_graph.get("title"):
+            result.notes += f" [Распознано: {knowledge_graph.get('title')}]"
+
+    def search_by_text(self, query: str, num_results: int = 10) -> ImageSearchResult:
+        """
+        Поиск изображений по текстовому запросу
+        """
+        result = ImageSearchResult(
+            resource_name="Google Images (text search)",
+            resource_url=f"https://images.google.com/search?q={urllib.parse.quote(query)}"
+        )
+
+        if not self.api_key:
+            result.notes = "Serper API ключ не настроен"
+            result.status = RiskLevel.YELLOW
+            return result
+
+        try:
+            payload = {
+                "q": query,
+                "gl": "ru",
+                "hl": "ru",
+                "num": num_results
+            }
+
+            response = self.session.post(
+                self.API_URL,
+                json=payload,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                images = data.get("images", [])
+                result.total_results = len(images)
+
+                for img in images[:10]:
+                    result.similar_images.append({
+                        "title": img.get("title", ""),
+                        "link": img.get("link", ""),
+                        "source": img.get("source", ""),
+                        "thumbnail": img.get("imageUrl", "")
+                    })
+
+                result.status = RiskLevel.GREEN
+                result.notes = f"Найдено {result.total_results} изображений по запросу '{query}'"
+            else:
+                result.notes = f"Ошибка API: {response.status_code}"
+                result.status = RiskLevel.YELLOW
+
+        except Exception as e:
+            result.notes = f"Ошибка: {str(e)}"
+            result.status = RiskLevel.YELLOW
+
+        return result
 
 
 class SerpAPIImageSearch:
@@ -380,12 +608,41 @@ class DirectImageSearch:
 class ComprehensiveImageSearcher:
     """
     Комплексный поиск изображений по всем доступным источникам
+
+    Порядок приоритета API:
+    1. Serper.dev (рекомендуется) - 2500 бесплатных, $0.30/1000
+    2. SerpAPI - 100 бесплатных/месяц, дороже
+    3. TinEye - для точных совпадений
+    4. Ручная проверка - если API не настроены
     """
 
-    def __init__(self, serpapi_key: str = None, tineye_key: str = None):
+    def __init__(self, serper_key: str = None, serpapi_key: str = None, tineye_key: str = None):
+        # Serper.dev - приоритетный API
+        self.serper = SerperImageSearch(serper_key) if serper_key or API_KEYS.get("serper") or os.environ.get("SERPER_API_KEY") else None
+
+        # SerpAPI - резервный
         self.serpapi = SerpAPIImageSearch(serpapi_key) if serpapi_key or API_KEYS.get("serpapi") else None
+
+        # TinEye
         self.tineye = TinEyeAPISearch(tineye_key)
+
+        # Прямой поиск (без API)
         self.direct = DirectImageSearch()
+
+        # Логируем доступные API
+        available = []
+        if self.serper and self.serper.api_key:
+            available.append("Serper.dev")
+        if self.serpapi and self.serpapi.api_key:
+            available.append("SerpAPI")
+        if self.tineye.api_key:
+            available.append("TinEye API")
+
+        if available:
+            print(f"[OK] Доступные API поиска изображений: {', '.join(available)}")
+        else:
+            print("[!] API поиска изображений не настроены. Используется ручной режим.")
+            print("    Рекомендуется: Serper.dev - https://serper.dev/ (2500 бесплатных запросов)")
 
     def search_all(self, image_path: str, use_api: bool = True) -> List[ImageSearchResult]:
         """
@@ -393,24 +650,42 @@ class ComprehensiveImageSearcher:
 
         Args:
             image_path: Путь к изображению
-            use_api: Использовать ли платные API
+            use_api: Использовать ли API (рекомендуется True)
 
         Returns:
             Список результатов поиска
         """
         results = []
+        api_used = False
 
-        # 1. SerpAPI (Google + Yandex)
-        if use_api and self.serpapi and self.serpapi.api_key:
+        # 1. ПРИОРИТЕТ: Serper.dev (Google Lens) - лучшее соотношение цена/качество
+        if use_api and self.serper and self.serper.api_key:
+            try:
+                serper_result = self.serper.search_by_image(image_path)
+                results.append(serper_result)
+                api_used = True
+                print(f"[Serper] Поиск выполнен: {serper_result.total_results} результатов")
+            except Exception as e:
+                print(f"[Serper] Ошибка: {e}")
+                results.append(ImageSearchResult(
+                    resource_name="Google Images (Serper.dev)",
+                    resource_url="https://images.google.com",
+                    status=RiskLevel.YELLOW,
+                    notes=f"Ошибка Serper API: {str(e)}"
+                ))
+
+        # 2. SerpAPI (резервный вариант, если Serper не настроен)
+        elif use_api and self.serpapi and self.serpapi.api_key:
             try:
                 google_result = self.serpapi.search_google_reverse(image_path)
                 results.append(google_result)
+                api_used = True
             except Exception as e:
                 results.append(ImageSearchResult(
-                    resource_name="Google Images",
+                    resource_name="Google Images (SerpAPI)",
                     resource_url="https://images.google.com",
                     status=RiskLevel.YELLOW,
-                    notes=f"Ошибка поиска: {str(e)}"
+                    notes=f"Ошибка SerpAPI: {str(e)}"
                 ))
 
             try:
@@ -418,13 +693,13 @@ class ComprehensiveImageSearcher:
                 results.append(yandex_result)
             except Exception as e:
                 results.append(ImageSearchResult(
-                    resource_name="Яндекс.Картинки",
+                    resource_name="Яндекс.Картинки (SerpAPI)",
                     resource_url="https://ya.ru/images",
                     status=RiskLevel.YELLOW,
-                    notes=f"Ошибка поиска: {str(e)}"
+                    notes=f"Ошибка: {str(e)}"
                 ))
 
-        # 2. TinEye
+        # 3. TinEye (дополнительная проверка точных совпадений)
         try:
             tineye_result = self.tineye.search(image_path)
             results.append(tineye_result)
@@ -433,15 +708,25 @@ class ComprehensiveImageSearcher:
                 resource_name="TinEye",
                 resource_url="https://tineye.com",
                 status=RiskLevel.YELLOW,
-                notes=f"Ошибка: {str(e)}"
+                notes=f"Ошибка TinEye: {str(e)}"
             ))
 
-        # 3. Если API не настроены, добавляем результаты для ручной проверки
-        if not results or all(r.status == RiskLevel.YELLOW and "не настроен" in r.notes for r in results):
+        # 4. Если API не использовались - добавляем ссылки для ручной проверки
+        if not api_used:
             search_urls = self.direct.generate_search_urls(image_path)
 
+            # Добавляем информацию о необходимости настройки API
+            setup_info = ImageSearchResult(
+                resource_name="⚙️ Настройка автопоиска",
+                resource_url="https://serper.dev/",
+                status=RiskLevel.YELLOW,
+                notes="Для автоматического поиска настройте Serper API (2500 бесплатных запросов). "
+                      "Добавьте SERPER_API_KEY в переменные окружения или config.py"
+            )
+            results.insert(0, setup_info)
+
             for name, url in search_urls.items():
-                if not any(r.resource_name == name for r in results):
+                if not any(name in r.resource_name for r in results):
                     results.append(ImageSearchResult(
                         resource_name=name,
                         resource_url=url,
@@ -449,10 +734,9 @@ class ComprehensiveImageSearcher:
                         notes=f"Требуется ручная проверка. Перейдите на {url} и загрузите изображение."
                     ))
 
-        # 4. Проверка уникальности
+        # 5. Проверка уникальности по метаданным
         uniqueness = self.direct.check_image_uniqueness(image_path)
 
-        # Добавляем результат анализа уникальности
         uniqueness_result = ImageSearchResult(
             resource_name="Анализ метаданных",
             resource_url="",
@@ -487,6 +771,7 @@ class ComprehensiveImageSearcher:
 
 # Экспорт для использования в других модулях
 __all__ = [
+    'SerperImageSearch',
     'SerpAPIImageSearch',
     'TinEyeAPISearch',
     'DirectImageSearch',
@@ -496,8 +781,27 @@ __all__ = [
 
 if __name__ == "__main__":
     # Тест
+    print("=" * 60)
+    print("  Модуль поиска изображений IP Checker")
+    print("=" * 60)
+
     searcher = ComprehensiveImageSearcher()
-    print("Модуль поиска изображений готов к работе")
-    print("\nДля автоматического поиска настройте API ключи:")
-    print("  - SerpAPI: https://serpapi.com/ (100 бесплатных запросов/месяц)")
-    print("  - TinEye: https://tineye.com/")
+
+    print("\n📋 Для автоматического поиска настройте API ключи:\n")
+    print("  🌟 РЕКОМЕНДУЕТСЯ: Serper.dev")
+    print("     URL: https://serper.dev/")
+    print("     Бесплатно: 2500 запросов")
+    print("     Цена: $0.30 за 1000 запросов")
+    print("     Переменная: SERPER_API_KEY")
+    print()
+    print("  📌 Альтернатива: SerpAPI")
+    print("     URL: https://serpapi.com/")
+    print("     Бесплатно: 100 запросов/месяц")
+    print("     Цена: $75 за 5000 запросов")
+    print("     Переменная: SERPAPI_KEY")
+    print()
+    print("  🔍 TinEye (для точных совпадений)")
+    print("     URL: https://tineye.com/")
+    print("     Переменная: TINEYE_API_KEY")
+    print()
+    print("Для настройки добавьте ключи в переменные окружения или config.py")

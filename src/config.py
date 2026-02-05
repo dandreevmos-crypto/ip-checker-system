@@ -24,6 +24,10 @@ API_KEYS = {
     "rospatent": os.environ.get("ROSPATENT_API_KEY", "0deb6def77394a5fbb0dd1af0571c336"),
     "tineye": os.environ.get("TINEYE_API_KEY", ""),
     "serpapi": os.environ.get("SERPAPI_KEY", ""),
+    # Serper.dev - РЕКОМЕНДУЕТСЯ для поиска изображений
+    # 2500 бесплатных запросов, затем $0.30/1000 (в 10 раз дешевле SerpAPI)
+    # Регистрация: https://serper.dev/
+    "serper": os.environ.get("SERPER_API_KEY", ""),
 }
 
 
