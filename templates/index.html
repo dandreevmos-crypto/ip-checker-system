@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Проверка интеллектуальной собственности</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --status-red: #FF4444;
+            --status-yellow: #FFBB33;
+            --status-green: #00C851;
+        }
+
+        body {
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, #4472C4 0%, #2E5090 100%);
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #eee;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .status-red {
+            background: var(--status-red);
+            color: white;
+        }
+
+        .status-yellow {
+            background: var(--status-yellow);
+            color: #333;
+        }
+
+        .status-green {
+            background: var(--status-green);
+            color: white;
+        }
+
+        .traffic-light {
+            display: flex;
+            gap: 8px;
+            margin: 20px 0;
+        }
+
+        .traffic-light .light {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #4472C4;
+            background: #f8f9ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #4472C4;
+            background: #e8f0ff;
+        }
+
+        .results-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .results-table td {
+            vertical-align: middle;
+        }
+
+        .resource-link {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #f0f0f0;
+            border-radius: 6px;
+            text-decoration: none;
+            color: #333;
+            font-size: 13px;
+            margin: 2px;
+            transition: all 0.2s;
+        }
+
+        .resource-link:hover {
+            background: #4472C4;
+            color: white;
+        }
+
+        .progress-indicator {
+            display: none;
+        }
+
+        .progress-indicator.active {
+            display: block;
+        }
+
+        .stat-card {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .stat-card .number {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .stat-card .label {
+            color: #666;
+            margin-top: 8px;
+        }
+
+        .stat-card.red .number { color: var(--status-red); }
+        .stat-card.yellow .number { color: var(--status-yellow); }
+        .stat-card.green .number { color: var(--status-green); }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+        }
+
+        .legend-color {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            margin-right: 12px;
+        }
+
+        .tab-content {
+            padding-top: 20px;
+        }
+
+        .quick-check-form {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        #resultsContainer {
+            display: none;
+        }
+
+        #resultsContainer.show {
+            display: block;
+        }
+
+        .factor-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin: 2px;
+        }
+
+        .factor-red { background: #ffebee; color: #c62828; }
+        .factor-yellow { background: #fff8e1; color: #f57f17; }
+        .factor-green { background: #e8f5e9; color: #2e7d32; }
+
+        .spinner-border {
+            width: 1rem;
+            height: 1rem;
+        }
+
+        .mktu-select {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .mktu-checkbox {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px;
+            cursor: pointer;
+        }
+
+        .mktu-checkbox:hover {
+            background: #f0f0f0;
+        }
+
+        .mktu-checkbox input {
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-shield-check me-2"></i>
+                Проверка интеллектуальной собственности
+            </a>
+            <div class="d-flex align-items-center text-white">
+                <a href="/api/template" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-download me-1"></i> Скачать шаблон
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container pb-5">
+        <!-- Легенда статусов -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h6 class="mb-3"><i class="bi bi-info-circle me-2"></i>Расшифровка статусов</h6>
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--status-red);"></div>
+                            <div>
+                                <strong>КРАСНЫЙ</strong><br>
+                                <small class="text-muted">Использование запрещено. Высокий риск претензий.</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--status-yellow);"></div>
+                            <div>
+                                <strong>ЖЕЛТЫЙ</strong><br>
+                                <small class="text-muted">Требуется дополнительная проверка.</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--status-green);"></div>
+                            <div>
+                                <strong>ЗЕЛЕНЫЙ</strong><br>
+                                <small class="text-muted">Можно использовать. Рисков не выявлено.</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Табы -->
+        <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="quick-tab" data-bs-toggle="tab" data-bs-target="#quick" type="button">
+                    <i class="bi bi-lightning me-1"></i> Быстрая проверка
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="batch-tab" data-bs-toggle="tab" data-bs-target="#batch" type="button">
+                    <i class="bi bi-list-check me-1"></i> Пакетная проверка
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="resources-tab" data-bs-toggle="tab" data-bs-target="#resources" type="button">
+                    <i class="bi bi-link-45deg me-1"></i> Ресурсы для проверки
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content" id="mainTabsContent">
+            <!-- Быстрая проверка -->
+            <div class="tab-pane fade show active" id="quick" role="tabpanel">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-search me-2"></i>Быстрая проверка обозначения
+                    </div>
+                    <div class="card-body">
+                        <form id="quickCheckForm" class="quick-check-form">
+                            <div class="mb-3">
+                                <label class="form-label">Текст для проверки *</label>
+                                <input type="text" class="form-control form-control-lg" id="checkText"
+                                       placeholder="Введите название, слоган или текст с товара" required>
+                                <div class="form-text">Введите текст, который планируете использовать на товаре</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Артикул товара</label>
+                                <input type="text" class="form-control" id="checkArticle"
+                                       placeholder="SKU или артикул">
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Классы МКТУ</label>
+                                <div class="mktu-select border rounded p-2">
+                                    {% for class_num, class_name in mktu_classes.items() %}
+                                    <label class="mktu-checkbox">
+                                        <input type="checkbox" name="mktu" value="{{ class_num }}">
+                                        <span>{{ class_num }} - {{ class_name }}</span>
+                                    </label>
+                                    {% endfor %}
+                                </div>
+                                <div class="form-text">Выберите классы товаров/услуг для более точной проверки</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Изображение (опционально)</label>
+                                <input type="file" class="form-control" id="checkImage" accept="image/*">
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-lg w-100">
+                                <i class="bi bi-search me-2"></i>Проверить
+                            </button>
+                        </form>
+
+                        <!-- Результаты быстрой проверки -->
+                        <div id="quickResults" class="mt-4" style="display: none;">
+                            <hr>
+                            <h5>Результаты проверки</h5>
+
+                            <div id="quickResultsContent"></div>
+
+                            <div class="mt-4">
+                                <h6>Ссылки для ручной проверки:</h6>
+                                <div id="manualCheckLinks"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Пакетная проверка -->
+            <div class="tab-pane fade" id="batch" role="tabpanel">
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <i class="bi bi-file-earmark-excel me-2"></i>Загрузка из файла
+                            </div>
+                            <div class="card-body">
+                                <div class="upload-area" id="excelUploadArea">
+                                    <i class="bi bi-cloud-upload" style="font-size: 48px; color: #ccc;"></i>
+                                    <p class="mt-3 mb-0">Перетащите Excel/CSV файл сюда</p>
+                                    <p class="text-muted">или нажмите для выбора</p>
+                                    <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display: none;">
+                                </div>
+                                <div class="mt-3">
+                                    <a href="/api/template" class="btn btn-outline-secondary btn-sm">
+                                        <i class="bi bi-download me-1"></i>Скачать шаблон
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <i class="bi bi-images me-2"></i>Проверка изображения
+                            </div>
+                            <div class="card-body">
+                                <div class="upload-area" id="imageUploadArea">
+                                    <i class="bi bi-images" style="font-size: 48px; color: #ccc;"></i>
+                                    <p class="mt-3 mb-0">Перетащите изображение сюда</p>
+                                    <p class="text-muted">или нажмите для выбора</p>
+                                    <input type="file" id="imageFileInput" accept="image/*" style="display: none;">
+                                </div>
+                                <div id="imagePreviewArea" style="display: none;" class="mt-3">
+                                    <img id="imagePreview" src="" alt="Preview" style="max-width: 100%; max-height: 200px; border-radius: 8px;">
+                                    <div class="mt-2">
+                                        <input type="text" class="form-control form-control-sm" id="imageManualText"
+                                               placeholder="Текст для проверки (опционально)">
+                                    </div>
+                                    <div class="mt-2">
+                                        <select class="form-select form-select-sm" id="imageMktuClass">
+                                            <option value="">Выберите класс МКТУ (опционально)</option>
+                                            {% for code, name in mktu_classes.items() %}
+                                            <option value="{{ code }}">{{ code }} - {{ name[:50] }}...</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <button class="btn btn-primary btn-sm mt-2 w-100" onclick="checkSingleImage()">
+                                        <i class="bi bi-search me-1"></i>Проверить изображение
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Прогресс и результаты -->
+                <div id="batchProgress" class="card mb-4" style="display: none;">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-border text-primary me-3" role="status"></div>
+                            <div>
+                                <strong>Выполняется проверка...</strong>
+                                <div class="progress mt-2" style="width: 300px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                         id="batchProgressBar" style="width: 0%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Результаты проверки изображения -->
+                <div id="imageCheckResults" class="card mb-4" style="display: none;">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-image me-2"></i>Результаты проверки изображения</span>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="closeImageResults()">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <!-- Левая колонка: изображение и статус -->
+                            <div class="col-md-4">
+                                <img id="resultImagePreview" src="" alt="Image" class="img-fluid rounded mb-3" style="max-height: 250px;">
+                                <div id="imageOverallStatus" class="alert mb-3">
+                                    <!-- Статус будет добавлен динамически -->
+                                </div>
+                                <div id="imageSummaryStats" class="small text-muted">
+                                    <!-- Статистика будет добавлена динамически -->
+                                </div>
+                            </div>
+
+                            <!-- Правая колонка: детали -->
+                            <div class="col-md-8">
+                                <!-- Вкладки -->
+                                <ul class="nav nav-tabs" id="imageResultTabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="tm-tab" data-bs-toggle="tab"
+                                                data-bs-target="#tmResults" type="button">
+                                            <i class="bi bi-search"></i> Товарные знаки
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="ocr-tab" data-bs-toggle="tab"
+                                                data-bs-target="#ocrResults" type="button">
+                                            <i class="bi bi-fonts"></i> Распознанный текст
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="links-tab" data-bs-toggle="tab"
+                                                data-bs-target="#searchLinks" type="button">
+                                            <i class="bi bi-link-45deg"></i> Поиск в интернете
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="rec-tab" data-bs-toggle="tab"
+                                                data-bs-target="#recommendations" type="button">
+                                            <i class="bi bi-lightbulb"></i> Рекомендации
+                                        </button>
+                                    </li>
+                                </ul>
+
+                                <div class="tab-content p-3 border border-top-0 rounded-bottom" id="imageResultTabContent">
+                                    <!-- Товарные знаки -->
+                                    <div class="tab-pane fade show active" id="tmResults" role="tabpanel">
+                                        <div id="tmResultsContent">
+                                            <!-- Результаты ТЗ будут добавлены динамически -->
+                                        </div>
+                                    </div>
+
+                                    <!-- Распознанный текст -->
+                                    <div class="tab-pane fade" id="ocrResults" role="tabpanel">
+                                        <div id="ocrResultsContent">
+                                            <!-- OCR результаты будут добавлены динамически -->
+                                        </div>
+                                    </div>
+
+                                    <!-- Ссылки для поиска -->
+                                    <div class="tab-pane fade" id="searchLinks" role="tabpanel">
+                                        <p class="text-muted mb-3">Выполните обратный поиск изображения:</p>
+                                        <div id="searchLinksContent" class="d-flex flex-wrap gap-2">
+                                            <!-- Ссылки будут добавлены динамически -->
+                                        </div>
+                                        <hr>
+                                        <p class="text-muted mb-3">Проверка товарных знаков:</p>
+                                        <div id="tmLinksContent" class="d-flex flex-wrap gap-2">
+                                            <!-- Ссылки ТЗ будут добавлены динамически -->
+                                        </div>
+                                    </div>
+
+                                    <!-- Рекомендации -->
+                                    <div class="tab-pane fade" id="recommendations" role="tabpanel">
+                                        <div id="recommendationsContent">
+                                            <!-- Рекомендации будут добавлены динамически -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="resultsContainer">
+                    <!-- Статистика -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <div class="card">
+                                <div class="card-body stat-card">
+                                    <div class="number" id="statTotal">0</div>
+                                    <div class="label">Всего товаров</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card">
+                                <div class="card-body stat-card red">
+                                    <div class="number" id="statRed">0</div>
+                                    <div class="label">Запрещено</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card">
+                                <div class="card-body stat-card yellow">
+                                    <div class="number" id="statYellow">0</div>
+                                    <div class="label">Требует проверки</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card">
+                                <div class="card-body stat-card green">
+                                    <div class="number" id="statGreen">0</div>
+                                    <div class="label">Разрешено</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Кнопки экспорта -->
+                    <div class="card mb-4">
+                        <div class="card-body">
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-success" onclick="exportResults('excel')">
+                                    <i class="bi bi-file-earmark-excel me-1"></i>Скачать Excel
+                                </button>
+                                <button class="btn btn-outline-secondary" onclick="exportResults('csv')">
+                                    <i class="bi bi-filetype-csv me-1"></i>CSV
+                                </button>
+                                <button class="btn btn-outline-secondary" onclick="exportResults('html')">
+                                    <i class="bi bi-filetype-html me-1"></i>HTML
+                                </button>
+                                <button class="btn btn-outline-secondary" onclick="exportResults('json')">
+                                    <i class="bi bi-filetype-json me-1"></i>JSON
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Таблица результатов -->
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-table me-2"></i>Результаты проверки</span>
+                            <div>
+                                <select class="form-select form-select-sm" id="filterStatus" style="width: auto;">
+                                    <option value="">Все статусы</option>
+                                    <option value="red">Только красные</option>
+                                    <option value="yellow">Только желтые</option>
+                                    <option value="green">Только зеленые</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover results-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Статус</th>
+                                            <th>Артикул</th>
+                                            <th>Название</th>
+                                            <th>Оценка</th>
+                                            <th>Описание</th>
+                                            <th>Рекомендации</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="resultsTableBody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ресурсы для проверки -->
+            <div class="tab-pane fade" id="resources" role="tabpanel">
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <i class="bi bi-bookmark-check me-2"></i>Базы товарных знаков
+                            </div>
+                            <div class="card-body">
+                                {% for key, resource in trademark_resources.items() %}
+                                <div class="mb-3 pb-3 border-bottom">
+                                    <h6>
+                                        <a href="{{ resource.url }}" target="_blank">
+                                            {{ resource.name }} <i class="bi bi-box-arrow-up-right small"></i>
+                                        </a>
+                                    </h6>
+                                    <p class="text-muted small mb-1">{{ resource.description }}</p>
+                                    {% if resource.limitations %}
+                                    <span class="badge bg-warning text-dark">{{ resource.limitations }}</span>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <i class="bi bi-image me-2"></i>Поиск изображений
+                            </div>
+                            <div class="card-body">
+                                {% for key, resource in image_resources.items() %}
+                                <div class="mb-3 pb-3 border-bottom">
+                                    <h6>
+                                        <a href="{{ resource.url }}" target="_blank">
+                                            {{ resource.name }} <i class="bi bi-box-arrow-up-right small"></i>
+                                        </a>
+                                    </h6>
+                                    <p class="text-muted small mb-0">{{ resource.description }}</p>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentSessionId = null;
+
+        // Быстрая проверка
+        document.getElementById('quickCheckForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const text = document.getElementById('checkText').value;
+            const article = document.getElementById('checkArticle').value;
+            const mktuCheckboxes = document.querySelectorAll('input[name="mktu"]:checked');
+            const mktuClasses = Array.from(mktuCheckboxes).map(cb => parseInt(cb.value));
+
+            const submitBtn = this.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Проверка...';
+
+            try {
+                const response = await fetch('/api/check/single', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        text: text,
+                        article: article,
+                        mktu_classes: mktuClasses
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    return;
+                }
+
+                displayQuickResults(data);
+
+            } catch (error) {
+                alert('Ошибка соединения: ' + error.message);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="bi bi-search me-2"></i>Проверить';
+            }
+        });
+
+        function displayQuickResults(data) {
+            const container = document.getElementById('quickResults');
+            const content = document.getElementById('quickResultsContent');
+            const links = document.getElementById('manualCheckLinks');
+
+            // Определяем статус
+            const statusClasses = {
+                'red': 'status-red',
+                'yellow': 'status-yellow',
+                'green': 'status-green'
+            };
+            const statusLabels = {
+                'red': 'ЗАПРЕЩЕНО',
+                'yellow': 'ВНИМАНИЕ',
+                'green': 'РАЗРЕШЕНО'
+            };
+
+            let html = `
+                <div class="alert alert-${data.overall_status === 'red' ? 'danger' : data.overall_status === 'yellow' ? 'warning' : 'success'}">
+                    <span class="status-badge ${statusClasses[data.overall_status]}">
+                        ${statusLabels[data.overall_status]}
+                    </span>
+                </div>
+            `;
+
+            // Результаты проверки ТЗ
+            if (data.trademark_results && data.trademark_results.length > 0) {
+                html += '<h6 class="mt-4">Проверка товарных знаков:</h6>';
+                data.trademark_results.forEach(r => {
+                    html += `
+                        <div class="card mb-3">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>${r.resource}</strong>
+                                    <span class="status-badge ${statusClasses[r.status]}">${statusLabels[r.status]}</span>
+                                </div>
+                                <p class="text-muted small mb-2">${r.notes}</p>
+                    `;
+
+                    // Показываем найденные совпадения
+                    if (r.matches && r.matches.length > 0) {
+                        html += `
+                            <div class="mt-2">
+                                <small class="text-primary fw-bold">Найденные товарные знаки:</small>
+                                <div class="table-responsive mt-1">
+                                    <table class="table table-sm table-bordered mb-0" style="font-size: 12px;">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>№ свид.</th>
+                                                <th>Название/Слова</th>
+                                                <th>МКТУ</th>
+                                                <th>Статус</th>
+                                                <th>Сходство</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                        `;
+                        r.matches.forEach(m => {
+                            const similarity = m.similarity_score ? Math.round(m.similarity_score * 100) + '%' : '-';
+                            const classes = Array.isArray(m.classes) ? m.classes.join(', ') : (m.classes || '-');
+                            const statusTm = m.status || '-';
+                            html += `
+                                <tr>
+                                    <td><strong>${m.registration_number || '-'}</strong></td>
+                                    <td>${m.text || '-'}</td>
+                                    <td>${classes}</td>
+                                    <td><span class="badge ${statusTm === 'действует' ? 'bg-success' : 'bg-secondary'}">${statusTm}</span></td>
+                                    <td>${similarity}</td>
+                                </tr>
+                            `;
+                        });
+                        html += `
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+
+            content.innerHTML = html;
+
+            // Ссылки для ручной проверки
+            if (data.manual_check_links) {
+                let linksHtml = '';
+                for (const [name, url] of Object.entries(data.manual_check_links)) {
+                    linksHtml += `<a href="${url}" target="_blank" class="resource-link">${name}</a>`;
+                }
+                links.innerHTML = linksHtml;
+            }
+
+            container.style.display = 'block';
+        }
+
+        // Загрузка Excel
+        const excelUploadArea = document.getElementById('excelUploadArea');
+        const excelFileInput = document.getElementById('excelFileInput');
+
+        excelUploadArea.addEventListener('click', () => excelFileInput.click());
+        excelUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            excelUploadArea.classList.add('dragover');
+        });
+        excelUploadArea.addEventListener('dragleave', () => {
+            excelUploadArea.classList.remove('dragover');
+        });
+        excelUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            excelUploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                uploadExcel(files[0]);
+            }
+        });
+
+        excelFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadExcel(e.target.files[0]);
+            }
+        });
+
+        async function uploadExcel(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            document.getElementById('batchProgress').style.display = 'block';
+
+            try {
+                const response = await fetch('/api/upload/excel', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    document.getElementById('batchProgress').style.display = 'none';
+                    return;
+                }
+
+                currentSessionId = data.session_id;
+                alert(`Загружено ${data.total_items} товаров. Нажмите OK для запуска проверки.`);
+
+                // Запускаем проверку
+                await runBatchCheck(data.session_id);
+
+            } catch (error) {
+                alert('Ошибка загрузки: ' + error.message);
+                document.getElementById('batchProgress').style.display = 'none';
+            }
+        }
+
+        // Загрузка изображений
+        const imageUploadArea = document.getElementById('imageUploadArea');
+        const imageFileInput = document.getElementById('imageFileInput');
+        let currentImageFile = null;
+
+        imageUploadArea.addEventListener('click', () => imageFileInput.click());
+        imageUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            imageUploadArea.classList.add('dragover');
+        });
+        imageUploadArea.addEventListener('dragleave', () => {
+            imageUploadArea.classList.remove('dragover');
+        });
+        imageUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            imageUploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                previewImage(e.dataTransfer.files[0]);
+            }
+        });
+
+        imageFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                previewImage(e.target.files[0]);
+            }
+        });
+
+        function previewImage(file) {
+            currentImageFile = file;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('imagePreview').src = e.target.result;
+                document.getElementById('imagePreviewArea').style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function checkSingleImage() {
+            if (!currentImageFile) {
+                alert('Сначала выберите изображение');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', currentImageFile);
+
+            const manualText = document.getElementById('imageManualText').value;
+            if (manualText) {
+                formData.append('text', manualText);
+            }
+
+            const mktuClass = document.getElementById('imageMktuClass').value;
+            if (mktuClass) {
+                formData.append('mktu_classes', mktuClass);
+            }
+
+            document.getElementById('batchProgress').style.display = 'block';
+
+            try {
+                const response = await fetch('/api/check/image', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                document.getElementById('batchProgress').style.display = 'none';
+
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    return;
+                }
+
+                displayImageCheckResults(data);
+
+            } catch (error) {
+                alert('Ошибка проверки: ' + error.message);
+                document.getElementById('batchProgress').style.display = 'none';
+            }
+        }
+
+        function displayImageCheckResults(data) {
+            const resultsDiv = document.getElementById('imageCheckResults');
+            resultsDiv.style.display = 'block';
+
+            // Изображение
+            document.getElementById('resultImagePreview').src = document.getElementById('imagePreview').src;
+
+            // Статус
+            const statusDiv = document.getElementById('imageOverallStatus');
+            const statusConfig = {
+                'red': { class: 'alert-danger', icon: '🔴', text: 'ЗАПРЕЩЕНО', desc: 'Обнаружены критические совпадения' },
+                'yellow': { class: 'alert-warning', icon: '🟡', text: 'ВНИМАНИЕ', desc: 'Требуется дополнительная проверка' },
+                'green': { class: 'alert-success', icon: '🟢', text: 'РАЗРЕШЕНО', desc: 'Явных проблем не обнаружено' }
+            };
+            const status = statusConfig[data.overall_status] || statusConfig.yellow;
+            statusDiv.className = `alert ${status.class}`;
+            statusDiv.innerHTML = `<strong>${status.icon} ${status.text}</strong><br><small>${status.desc}</small>`;
+
+            // Статистика
+            const summaryDiv = document.getElementById('imageSummaryStats');
+            summaryDiv.innerHTML = `
+                <div><strong>Распознано текстов:</strong> ${data.summary?.texts_found || 0}</div>
+                <div><strong>Проверено слов:</strong> ${data.summary?.texts_checked || 0}</div>
+                <div><strong>Проверок ТЗ:</strong> ${data.summary?.tm_checks || 0}</div>
+                <div><strong>Факторов риска:</strong> ${data.summary?.risk_factors_count || 0}</div>
+            `;
+
+            // Результаты ТЗ
+            const tmContent = document.getElementById('tmResultsContent');
+            if (data.trademark_results && data.trademark_results.length > 0) {
+                let tmHtml = '';
+                data.trademark_results.forEach(r => {
+                    const statusBadge = r.status === 'red' ? 'bg-danger' :
+                                       r.status === 'yellow' ? 'bg-warning' : 'bg-success';
+                    tmHtml += `
+                        <div class="border rounded p-2 mb-2">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <strong>"${r.text}"</strong>
+                                <span class="badge ${statusBadge}">${r.status.toUpperCase()}</span>
+                            </div>
+                            <small class="text-muted">${r.resource}</small>
+                            <div class="small">${r.notes || ''}</div>
+                    `;
+
+                    if (r.matches && r.matches.length > 0) {
+                        tmHtml += `<table class="table table-sm table-bordered mt-2 mb-0">
+                            <thead><tr><th>№</th><th>Название</th><th>МКТУ</th><th>Статус</th><th>Сходство</th></tr></thead>
+                            <tbody>`;
+                        r.matches.slice(0, 5).forEach(m => {
+                            const similarity = m.similarity_score ? Math.round(m.similarity_score * 100) + '%' : '-';
+                            const mktuStr = Array.isArray(m.classes) ? m.classes.slice(0, 5).join(', ') : '';
+                            tmHtml += `<tr>
+                                <td>${m.registration_number || '-'}</td>
+                                <td>${m.text || '-'}</td>
+                                <td>${mktuStr}</td>
+                                <td>${m.status || '-'}</td>
+                                <td>${similarity}</td>
+                            </tr>`;
+                        });
+                        tmHtml += '</tbody></table>';
+                    }
+                    tmHtml += '</div>';
+                });
+                tmContent.innerHTML = tmHtml;
+            } else {
+                tmContent.innerHTML = '<div class="text-muted">Проверка товарных знаков не выполнена (текст не распознан)</div>';
+            }
+
+            // OCR результаты
+            const ocrContent = document.getElementById('ocrResultsContent');
+            if (data.recognized_texts && data.recognized_texts.length > 0) {
+                let ocrHtml = '<ul class="list-group">';
+                data.recognized_texts.forEach(t => {
+                    ocrHtml += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                        "${t.text}"
+                        <span class="badge bg-secondary">${t.confidence}%</span>
+                    </li>`;
+                });
+                ocrHtml += '</ul>';
+                ocrContent.innerHTML = ocrHtml;
+            } else {
+                ocrContent.innerHTML = `
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        Текст на изображении не распознан. Это может означать:
+                        <ul class="mb-0 mt-2">
+                            <li>На изображении нет текста</li>
+                            <li>Текст слишком мелкий или нечитаемый</li>
+                            <li>OCR модуль не установлен</li>
+                        </ul>
+                        <div class="mt-2">Введите текст вручную в поле выше для проверки.</div>
+                    </div>
+                `;
+            }
+
+            // Ссылки для поиска изображений
+            const searchLinksContent = document.getElementById('searchLinksContent');
+            if (data.image_search_links) {
+                let linksHtml = '';
+                Object.entries(data.image_search_links).forEach(([key, info]) => {
+                    linksHtml += `
+                        <a href="${info.url}" target="_blank" class="btn btn-outline-primary btn-sm"
+                           title="${info.instruction}">
+                            <i class="bi bi-box-arrow-up-right me-1"></i>${info.name}
+                        </a>
+                    `;
+                });
+                searchLinksContent.innerHTML = linksHtml;
+            }
+
+            // Ссылки для проверки ТЗ
+            const tmLinksContent = document.getElementById('tmLinksContent');
+            if (data.trademark_links) {
+                let tmLinksHtml = '';
+                Object.entries(data.trademark_links).forEach(([name, url]) => {
+                    tmLinksHtml += `
+                        <a href="${url}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                            <i class="bi bi-box-arrow-up-right me-1"></i>${name}
+                        </a>
+                    `;
+                });
+                tmLinksContent.innerHTML = tmLinksHtml;
+            }
+
+            // Рекомендации
+            const recContent = document.getElementById('recommendationsContent');
+            if (data.recommendations && data.recommendations.length > 0) {
+                let recHtml = '<ul class="list-group">';
+                data.recommendations.forEach(rec => {
+                    const icon = rec.startsWith('⛔') ? 'bi-x-circle text-danger' :
+                                rec.startsWith('⚠️') ? 'bi-exclamation-triangle text-warning' :
+                                rec.startsWith('✅') ? 'bi-check-circle text-success' : 'bi-info-circle';
+                    recHtml += `<li class="list-group-item"><i class="bi ${icon} me-2"></i>${rec}</li>`;
+                });
+                recHtml += '</ul>';
+                recContent.innerHTML = recHtml;
+            }
+
+            // Факторы риска
+            if (data.risk_factors && data.risk_factors.length > 0) {
+                let riskHtml = '<div class="alert alert-warning mt-3"><strong>Факторы риска:</strong><ul class="mb-0 mt-2">';
+                data.risk_factors.forEach(f => {
+                    const icon = f.severity === 'red' ? '🔴' : '🟡';
+                    riskHtml += `<li>${icon} ${f.message}</li>`;
+                });
+                riskHtml += '</ul></div>';
+                recContent.innerHTML += riskHtml;
+            }
+
+            // Прокручиваем к результатам
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function closeImageResults() {
+            document.getElementById('imageCheckResults').style.display = 'none';
+        }
+
+        // Массовая загрузка изображений (старая функция для совместимости)
+        async function uploadImages(files) {
+            const formData = new FormData();
+            for (const file of files) {
+                formData.append('files', file);
+            }
+
+            document.getElementById('batchProgress').style.display = 'block';
+
+            try {
+                const response = await fetch('/api/upload/images', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    document.getElementById('batchProgress').style.display = 'none';
+                    return;
+                }
+
+                currentSessionId = data.session_id;
+                await runBatchCheck(data.session_id);
+
+            } catch (error) {
+                alert('Ошибка загрузки: ' + error.message);
+                document.getElementById('batchProgress').style.display = 'none';
+            }
+        }
+
+        async function runBatchCheck(sessionId) {
+            try {
+                const response = await fetch(`/api/check/session/${sessionId}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Ошибка проверки: ' + data.error);
+                    document.getElementById('batchProgress').style.display = 'none';
+                    return;
+                }
+
+                document.getElementById('batchProgress').style.display = 'none';
+                displayBatchResults(data);
+
+            } catch (error) {
+                alert('Ошибка проверки: ' + error.message);
+                document.getElementById('batchProgress').style.display = 'none';
+            }
+        }
+
+        function displayBatchResults(data) {
+            // Обновляем статистику
+            document.getElementById('statTotal').textContent = data.statistics.total;
+            document.getElementById('statRed').textContent = data.statistics.red;
+            document.getElementById('statYellow').textContent = data.statistics.yellow;
+            document.getElementById('statGreen').textContent = data.statistics.green;
+
+            // Заполняем таблицу
+            const tbody = document.getElementById('resultsTableBody');
+            tbody.innerHTML = '';
+
+            const statusBadges = {
+                'red': '<span class="status-badge status-red">ЗАПРЕЩЕНО</span>',
+                'yellow': '<span class="status-badge status-yellow">ВНИМАНИЕ</span>',
+                'green': '<span class="status-badge status-green">РАЗРЕШЕНО</span>'
+            };
+
+            data.results.forEach(item => {
+                const row = document.createElement('tr');
+                row.dataset.status = item.status;
+
+                row.innerHTML = `
+                    <td>${statusBadges[item.status]}</td>
+                    <td><strong>${item.article}</strong></td>
+                    <td>${item.name}</td>
+                    <td>${Math.round(item.risk_score)}%</td>
+                    <td>${item.summary || ''}</td>
+                    <td>${(item.recommendations || []).slice(0, 2).join('<br>')}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+
+            document.getElementById('resultsContainer').classList.add('show');
+        }
+
+        // Фильтрация по статусу
+        document.getElementById('filterStatus').addEventListener('change', function() {
+            const status = this.value;
+            const rows = document.querySelectorAll('#resultsTableBody tr');
+
+            rows.forEach(row => {
+                if (!status || row.dataset.status === status) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+
+        // Экспорт результатов
+        function exportResults(format) {
+            if (!currentSessionId) {
+                alert('Сначала выполните проверку');
+                return;
+            }
+
+            window.location.href = `/api/export/${currentSessionId}/${format}`;
+        }
+    </script>
+</body>
+</html>
