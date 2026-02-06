@@ -67,26 +67,94 @@ class TextSimilarity:
 
         return 0.0
 
+    # Словарь фонетической транслитерации (созвучие)
+    PHONETIC_MAP_RU_TO_EN = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+    }
+
+    PHONETIC_MAP_EN_TO_RU = {
+        'a': 'а', 'b': 'б', 'c': 'к', 'd': 'д', 'e': 'е', 'f': 'ф', 'g': 'г',
+        'h': 'х', 'i': 'и', 'j': 'дж', 'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н',
+        'o': 'о', 'p': 'п', 'q': 'к', 'r': 'р', 's': 'с', 't': 'т', 'u': 'у',
+        'v': 'в', 'w': 'в', 'x': 'кс', 'y': 'й', 'z': 'з',
+        'ch': 'ч', 'sh': 'ш', 'th': 'т', 'ph': 'ф', 'ck': 'к'
+    }
+
     @staticmethod
     def transliterate_variants(text: str) -> List[str]:
-        """Получение вариантов транслитерации"""
+        """
+        Получение всех вариантов транслитерации для поиска созвучных названий.
+        Возвращает оригинал + транслитерацию в обе стороны + фонетические варианты.
+        """
         variants = [text]
+        text_lower = text.lower()
 
-        # Транслитерация с русского на латиницу
+        # Определяем язык текста
+        has_cyrillic = any('\u0400' <= c <= '\u04FF' for c in text)
+        has_latin = any('a' <= c.lower() <= 'z' for c in text)
+
+        # 1. Стандартная транслитерация через библиотеку
         try:
             translit_ru = translit(text, 'ru', reversed=True)
-            variants.append(translit_ru)
+            if translit_ru and translit_ru != text:
+                variants.append(translit_ru)
         except:
             pass
 
-        # Транслитерация с латиницы на русский
         try:
             translit_en = translit(text, 'ru')
-            variants.append(translit_en)
+            if translit_en and translit_en != text:
+                variants.append(translit_en)
         except:
             pass
 
-        return list(set(variants))
+        # 2. Фонетическая транслитерация (для созвучия)
+        if has_cyrillic:
+            # Русский → Латиница (фонетически)
+            phonetic_en = ""
+            for char in text_lower:
+                phonetic_en += TextSimilarity.PHONETIC_MAP_RU_TO_EN.get(char, char)
+            if phonetic_en and phonetic_en != text_lower:
+                variants.append(phonetic_en)
+                variants.append(phonetic_en.capitalize())
+
+        if has_latin:
+            # Латиница → Русский (фонетически)
+            phonetic_ru = text_lower
+            # Сначала заменяем диграфы
+            for digraph, ru_char in sorted(TextSimilarity.PHONETIC_MAP_EN_TO_RU.items(),
+                                           key=lambda x: -len(x[0])):
+                if len(digraph) > 1:
+                    phonetic_ru = phonetic_ru.replace(digraph, ru_char)
+            # Потом одиночные буквы
+            result = ""
+            for char in phonetic_ru:
+                if char in TextSimilarity.PHONETIC_MAP_EN_TO_RU and len(char) == 1:
+                    result += TextSimilarity.PHONETIC_MAP_EN_TO_RU[char]
+                else:
+                    result += char
+            phonetic_ru = result
+            if phonetic_ru and phonetic_ru != text_lower:
+                variants.append(phonetic_ru)
+                variants.append(phonetic_ru.capitalize())
+
+        # 3. Альтернативные написания (частые замены)
+        alternatives = {
+            'c': 'k', 'k': 'c',  # c/k взаимозаменяемы
+            'i': 'y', 'y': 'i',  # i/y взаимозаменяемы
+            'ph': 'f', 'f': 'ph',
+            'ks': 'x', 'x': 'ks',
+        }
+        for old, new in alternatives.items():
+            if old in text_lower:
+                variants.append(text_lower.replace(old, new))
+
+        # Убираем дубликаты и пустые
+        return list(set(v for v in variants if v and v.strip()))
 
     @staticmethod
     def check_similarity(text1: str, text2: str,
@@ -97,13 +165,24 @@ class TextSimilarity:
         Returns:
             (is_similar, score, reason)
         """
+        norm1 = TextSimilarity.normalize_text(text1)
+        norm2 = TextSimilarity.normalize_text(text2)
+
         # Точное совпадение
-        if TextSimilarity.normalize_text(text1) == TextSimilarity.normalize_text(text2):
+        if norm1 == norm2:
             return True, 1.0, "Точное совпадение"
 
-        # Проверка вхождения
-        if TextSimilarity.contains_similarity(text1, text2) == 1.0:
-            return True, 0.95, "Один текст содержится в другом"
+        # Проверка вхождения - оценка ЗАВИСИТ от соотношения длин
+        if norm1 in norm2 or norm2 in norm1:
+            shorter = min(len(norm1), len(norm2))
+            longer = max(len(norm1), len(norm2))
+            # Чем больше разница в длине, тем меньше оценка
+            containment_score = shorter / longer
+            # Если тексты очень разные по длине - это частичное совпадение
+            if containment_score < 0.7:
+                return True, containment_score, f"Частичное вхождение ({containment_score:.0%})"
+            else:
+                return True, 0.9, "Один текст содержится в другом"
 
         # Проверка по Левенштейну
         lev_score = TextSimilarity.levenshtein_similarity(text1, text2)
@@ -114,13 +193,32 @@ class TextSimilarity:
         variants1 = TextSimilarity.transliterate_variants(text1)
         variants2 = TextSimilarity.transliterate_variants(text2)
 
+        best_translit_score = 0
         for v1 in variants1:
             for v2 in variants2:
-                lev_score = TextSimilarity.levenshtein_similarity(v1, v2)
-                if lev_score >= threshold:
-                    return True, lev_score, f"Схожесть с учетом транслитерации: {lev_score:.2f}"
+                v1_norm = TextSimilarity.normalize_text(v1)
+                v2_norm = TextSimilarity.normalize_text(v2)
 
-        return False, lev_score, "Нет значительного сходства"
+                # Точное совпадение транслитерации
+                if v1_norm == v2_norm:
+                    return True, 1.0, "Точное совпадение (транслитерация)"
+
+                # Вхождение с учётом транслитерации
+                if v1_norm in v2_norm or v2_norm in v1_norm:
+                    shorter = min(len(v1_norm), len(v2_norm))
+                    longer = max(len(v1_norm), len(v2_norm))
+                    containment_score = shorter / longer
+                    if containment_score > best_translit_score:
+                        best_translit_score = containment_score
+
+                score = TextSimilarity.levenshtein_similarity(v1, v2)
+                if score > best_translit_score:
+                    best_translit_score = score
+
+        if best_translit_score >= threshold:
+            return True, best_translit_score, f"Схожесть с транслитерацией: {best_translit_score:.2f}"
+
+        return False, max(lev_score, best_translit_score), "Нет значительного сходства"
 
 
 class TrademarkChecker:
@@ -365,7 +463,10 @@ class LinkmarkChecker(TrademarkChecker):
         self.resource_info = TRADEMARK_RESOURCES["linkmark"]
 
     def check_trademark(self, text: str, mktu_classes: List[int] = None) -> TrademarkCheckResult:
-        """Проверка товарного знака через Linkmark"""
+        """
+        Проверка товарного знака через Linkmark.
+        Автоматически проверяет все варианты транслитерации для поиска созвучных названий.
+        """
         result = TrademarkCheckResult(
             resource_name=self.resource_info["name"],
             resource_url=self.resource_info["url"],
@@ -373,29 +474,93 @@ class LinkmarkChecker(TrademarkChecker):
             mktu_classes=mktu_classes or []
         )
 
-        try:
-            # POST запрос на поиск (без фильтрации по МКТУ - Linkmark не поддерживает)
-            search_data = {"search": text}
+        # Получаем все варианты транслитерации для поиска
+        search_variants = TextSimilarity.transliterate_variants(text)
+        print(f"[Linkmark] Поиск вариантов: {search_variants}")
 
-            response = self.session.post(
-                self.search_url,
-                data=search_data,
-                timeout=30,
-                allow_redirects=True
-            )
+        all_found_matches = []
+        best_status = RiskLevel.GREEN
+        search_notes = []
 
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                self._parse_linkmark_results(result, soup, text, mktu_classes)
-            else:
-                result.notes = f"Рекомендуется ручная проверка на {self.base_url}"
-                result.status = RiskLevel.YELLOW
+        for variant in search_variants[:3]:  # Проверяем до 3 вариантов
+            try:
+                # POST запрос на поиск
+                search_data = {"search": variant}
 
-        except requests.exceptions.RequestException as e:
-            result.notes = f"Ошибка подключения: {str(e)}"
-            result.status = RiskLevel.YELLOW
-        except Exception as e:
-            result.notes = f"Требуется ручная проверка на {self.base_url}: {str(e)}"
+                response = self.session.post(
+                    self.search_url,
+                    data=search_data,
+                    timeout=30,
+                    allow_redirects=True
+                )
+
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    # Временный результат для этого варианта
+                    temp_result = TrademarkCheckResult(
+                        resource_name=self.resource_info["name"],
+                        resource_url=self.resource_info["url"],
+                        search_query=variant,
+                        mktu_classes=mktu_classes or []
+                    )
+                    self._parse_linkmark_results(temp_result, soup, variant, mktu_classes)
+                    print(f"[Linkmark] После _parse: temp_result.found_matches = {len(temp_result.found_matches)}")
+
+                    # Собираем результаты
+                    for match in temp_result.found_matches:
+                        # Добавляем информацию о варианте поиска
+                        match['search_variant'] = variant
+                        if match not in all_found_matches:
+                            all_found_matches.append(match)
+
+                    # Обновляем лучший статус
+                    if temp_result.status == RiskLevel.RED:
+                        best_status = RiskLevel.RED
+                        if temp_result.exact_match:
+                            result.exact_match = True
+                        if temp_result.similar_match:
+                            result.similar_match = True
+                    elif temp_result.status == RiskLevel.YELLOW and best_status != RiskLevel.RED:
+                        best_status = RiskLevel.YELLOW
+
+                    if temp_result.notes:
+                        search_notes.append(f"[{variant}]: {temp_result.notes}")
+
+                    # Обновляем similarity_score
+                    result.similarity_score = max(result.similarity_score, temp_result.similarity_score)
+
+                    # Небольшая пауза между запросами
+                    if len(search_variants) > 1:
+                        time.sleep(0.5)
+
+            except requests.exceptions.RequestException as e:
+                search_notes.append(f"[{variant}]: Ошибка подключения")
+            except Exception as e:
+                search_notes.append(f"[{variant}]: Ошибка: {str(e)}")
+
+        # Устанавливаем итоговые результаты
+        print(f"[Linkmark FINAL] all_found_matches: {len(all_found_matches)}, best_status: {best_status}")
+        result.found_matches = all_found_matches[:15]  # Максимум 15 результатов
+        print(f"[Linkmark FINAL] result.found_matches assigned: {len(result.found_matches)}")
+        result.status = best_status
+
+        # Формируем итоговые заметки
+        if len(search_variants) > 1:
+            variants_info = f" (проверены варианты: {', '.join(search_variants[:3])})"
+        else:
+            variants_info = ""
+
+        if result.exact_match:
+            result.notes = f"Найден тождественный ТЗ!{variants_info}"
+        elif result.similar_match:
+            result.notes = f"Найдены похожие ТЗ{variants_info}"
+        elif all_found_matches:
+            result.notes = f"Найдено {len(all_found_matches)} результатов{variants_info}"
+        else:
+            result.notes = f"Совпадений не найдено{variants_info}"
+
+        if not all_found_matches and not result.notes:
+            result.notes = f"Рекомендуется ручная проверка на {self.base_url}"
             result.status = RiskLevel.YELLOW
 
         return result
@@ -403,7 +568,10 @@ class LinkmarkChecker(TrademarkChecker):
     def _parse_linkmark_results(self, result: TrademarkCheckResult,
                                  soup: BeautifulSoup, search_text: str,
                                  mktu_filter: List[int] = None):
-        """Парсинг результатов поиска Linkmark с фильтрацией по МКТУ"""
+        """
+        Парсинг результатов поиска Linkmark с СТРОГОЙ фильтрацией по МКТУ.
+        Если указаны классы МКТУ - показываются ТОЛЬКО результаты в этих классах.
+        """
 
         # Ищем счетчики результатов в табах
         total_marks = 0
@@ -425,16 +593,22 @@ class LinkmarkChecker(TrademarkChecker):
 
         # Преобразуем фильтр МКТУ в строки для сравнения
         mktu_filter_str = set(str(c) for c in mktu_filter) if mktu_filter else None
+        print(f"[Linkmark] mktu_filter={mktu_filter}, mktu_filter_str={mktu_filter_str}")
 
         # Ищем карточки товарных знаков
-        # Ищем карточки товарных знаков
         items = soup.find_all('div', class_='result-div-item')
+        print(f"[Linkmark] Найдено {len(items)} карточек ТЗ на странице")
 
         # Счётчики для статистики
         matches_in_mktu = 0  # Совпадения в выбранных классах МКТУ
+        matches_outside_mktu = 0  # Совпадения вне выбранных классов
         high_similarity_count = 0  # Высокое сходство (>80%)
 
-        for item in items[:30]:  # Обрабатываем первые 30
+        # Списки для разделения результатов
+        results_in_mktu = []  # Результаты в выбранных классах МКТУ
+        results_outside_mktu = []  # Результаты вне выбранных классов
+
+        for item in items[:50]:  # Обрабатываем больше для лучшей фильтрации
             # Извлекаем номер свидетельства
             number_div = item.find('div', class_='result-div-item-number')
             reg_number = ""
@@ -477,101 +651,194 @@ class LinkmarkChecker(TrademarkChecker):
             if words_div:
                 trademark_words = words_div.get_text(strip=True)
 
-            # Проверяем схожесть по каждому слову в ТЗ
+            # Проверяем схожесть с ЦЕЛЫМ названием товарного знака
             compare_text = trademark_words if trademark_words else ""
             best_score = 0.0
             best_reason = "Найден в результатах поиска"
+            is_exact_name_match = False  # Флаг точного совпадения ВСЕГО названия
 
-            # Разбиваем слова из ТЗ и проверяем каждое
             if compare_text:
-                words_list = compare_text.split()
-                for word in words_list:
-                    is_similar, score, reason = TextSimilarity.check_similarity(
-                        search_text, word, 0.7  # Понижен порог для отлова похожих
+                search_normalized = TextSimilarity.normalize_text(search_text)
+                compare_normalized = TextSimilarity.normalize_text(compare_text)
+
+                # 1. Проверяем точное совпадение ВСЕГО названия
+                if search_normalized == compare_normalized:
+                    best_score = 1.0
+                    best_reason = "Точное совпадение названия"
+                    is_exact_name_match = True
+                else:
+                    # 1.1 Проверяем совпадение с учётом транслитерации
+                    search_variants = TextSimilarity.transliterate_variants(search_text)
+                    compare_variants = TextSimilarity.transliterate_variants(compare_text)
+                    for sv in search_variants:
+                        sv_norm = TextSimilarity.normalize_text(sv)
+                        for cv in compare_variants:
+                            cv_norm = TextSimilarity.normalize_text(cv)
+                            if sv_norm == cv_norm:
+                                best_score = 1.0
+                                best_reason = "Точное совпадение (транслитерация)"
+                                is_exact_name_match = True
+                                break
+                        if is_exact_name_match:
+                            break
+
+                if not is_exact_name_match:
+                    # 2. Проверяем схожесть ВСЕГО названия
+                    is_similar_full, score_full, reason_full = TextSimilarity.check_similarity(
+                        search_text, compare_text, 0.7
                     )
-                    if score > best_score:
-                        best_score = score
-                        best_reason = reason
+                    if score_full > best_score:
+                        best_score = score_full
+                        best_reason = reason_full
 
-            # Также проверяем весь текст целиком
-            if compare_text:
-                is_similar, score, reason = TextSimilarity.check_similarity(
-                    search_text, compare_text, 0.7
-                )
-                if score > best_score:
-                    best_score = score
-                    best_reason = reason
+                    # 3. Проверяем, является ли наш запрос одним из слов в ТЗ
+                    # Но это НЕ считается точным совпадением - только частичное
+                    words_list = compare_normalized.split()
+                    if len(words_list) > 1:  # Только если в ТЗ несколько слов
+                        for word in words_list:
+                            word_similarity = TextSimilarity.levenshtein_similarity(search_normalized, word)
+                            if word_similarity >= 0.9:
+                                # Слово найдено, но это часть составного названия
+                                # Снижаем оценку пропорционально длине названия
+                                partial_score = word_similarity * (len(search_normalized) / len(compare_normalized))
+                                partial_score = min(partial_score, 0.7)  # Максимум 70% для частичного совпадения
+                                if partial_score > best_score:
+                                    best_score = partial_score
+                                    best_reason = f"Частичное совпадение (слово '{word}' в составном названии)"
+
+                    # 4. Если наш запрос длиннее - проверяем, содержится ли ТЗ в нашем запросе
+                    if search_normalized in compare_normalized or compare_normalized in search_normalized:
+                        # Одно содержится в другом - оцениваем по соотношению длин
+                        shorter = min(len(search_normalized), len(compare_normalized))
+                        longer = max(len(search_normalized), len(compare_normalized))
+                        containment_score = shorter / longer
+                        if containment_score > best_score and containment_score < 0.9:
+                            best_score = containment_score
+                            best_reason = "Частичное вхождение"
 
             # Определяем уровень совпадения
-            is_exact = best_score >= 0.95
-            is_high_similar = best_score >= 0.8
-            is_similar = best_score >= 0.7
+            # Точное совпадение - только если ПОЛНОСТЬЮ совпадает название
+            is_exact = is_exact_name_match and best_score >= 0.95
+            is_high_similar = best_score >= 0.8 and not is_exact_name_match
+            # Показываем ВСЕ результаты из поиска Linkmark (они уже отфильтрованы по запросу)
+            # Если есть номер регистрации - это валидный результат из Linkmark
+            is_relevant = bool(reg_number)  # Любой результат с номером регистрации
 
-            # Добавляем только релевантные результаты
-            if is_similar or (mktu_match and best_score >= 0.5):
-                match_info = {
-                    "text": trademark_words or f"ТЗ №{reg_number}",
-                    "registration_number": reg_number,
-                    "similarity_score": best_score,
-                    "reason": best_reason,
-                    "classes": tm_classes,
-                    "status": tm_status,
-                    "holder": holder[:100] if holder else "",
-                    "mktu_match": mktu_match
-                }
+            # Если нет score, устанавливаем минимальный для отображения
+            if best_score == 0 and reg_number:
+                best_score = 0.1
+                best_reason = "Найден в результатах поиска Linkmark"
 
-                # Приоритет: сначала совпадения по МКТУ, потом остальные
-                if mktu_match and is_similar:
-                    result.found_matches.insert(0, match_info)
-                    matches_in_mktu += 1
+            # Создаём информацию о совпадении
+            match_info = {
+                "text": trademark_words or f"ТЗ №{reg_number}",
+                "registration_number": reg_number,
+                "similarity_score": best_score,  # 0-1 для логики, умножается на 100 в шаблоне
+                "reason": best_reason,
+                "classes": tm_classes,
+                "classes_str": ", ".join(tm_classes) if tm_classes else "не указаны",
+                "status": tm_status,
+                "holder": holder[:100] if holder else "",
+                "mktu_match": mktu_match
+            }
+
+            # Отладка: выводим найденные результаты
+            print(f"[Linkmark DEBUG] ТЗ #{reg_number}: '{trademark_words[:40] if trademark_words else '-'}', МКТУ: {tm_classes}, score: {best_score:.2f}, mktu_match: {mktu_match}, is_relevant: {is_relevant}")
+
+            # СТРОГАЯ фильтрация по МКТУ:
+            # Если указан фильтр МКТУ - добавляем ТОЛЬКО совпадения в этих классах
+            if mktu_filter_str:
+                if mktu_match:
+                    # Совпадение в выбранном классе МКТУ - добавляем ВСЕ результаты
+                    if is_relevant:
+                        results_in_mktu.append(match_info)
+                        matches_in_mktu += 1
+
+                        if is_exact:
+                            result.exact_match = True
+                        elif is_high_similar:
+                            result.similar_match = True
+                            high_similarity_count += 1
+
+                        result.similarity_score = max(result.similarity_score, best_score)
+                        if reg_number:
+                            result.registration_numbers.append(reg_number)
                 else:
-                    result.found_matches.append(match_info)
+                    # Совпадение вне выбранного класса - считаем для информации
+                    if is_relevant:
+                        matches_outside_mktu += 1
+                        results_outside_mktu.append(match_info)
+            else:
+                # Фильтр МКТУ не указан - показываем ВСЕ результаты из поиска
+                if is_relevant:
+                    results_in_mktu.append(match_info)
 
-                if is_exact:
-                    result.exact_match = True
-                elif is_high_similar:
-                    result.similar_match = True
-                    high_similarity_count += 1
+                    if is_exact:
+                        result.exact_match = True
+                    elif is_high_similar:
+                        result.similar_match = True
+                        high_similarity_count += 1
 
-                result.similarity_score = max(result.similarity_score, best_score)
+                    result.similarity_score = max(result.similarity_score, best_score)
+                    if reg_number:
+                        result.registration_numbers.append(reg_number)
 
-                if reg_number:
-                    result.registration_numbers.append(reg_number)
-
-        # Ограничиваем количество результатов
-        result.found_matches = result.found_matches[:10]
+        # Формируем итоговые результаты
+        # Сортируем по схожести (от большей к меньшей)
+        results_in_mktu.sort(key=lambda x: x['similarity_score'], reverse=True)
+        print(f"[Linkmark] results_in_mktu: {len(results_in_mktu)}, results_outside_mktu: {len(results_outside_mktu)}")
+        result.found_matches = results_in_mktu[:15]  # Показываем до 15 результатов
+        print(f"[Linkmark] result.found_matches: {len(result.found_matches)}")
 
         # Определяем статус с учётом фильтра МКТУ
-        self._set_status(result, total_marks, total_apps, matches_in_mktu, mktu_filter)
+        self._set_status(result, total_marks, total_apps, matches_in_mktu,
+                        matches_outside_mktu, mktu_filter)
 
     def _set_status(self, result: TrademarkCheckResult, total_marks: int = 0,
                     total_apps: int = 0, matches_in_mktu: int = 0,
-                    mktu_filter: List[int] = None):
-        """Установка статуса на основе результатов"""
+                    matches_outside_mktu: int = 0, mktu_filter: List[int] = None):
+        """
+        Установка статуса на основе результатов.
+        ВАЖНО: Статус определяется ТОЛЬКО по совпадениям в выбранных классах МКТУ.
+        """
 
         mktu_info = f" (класс {', '.join(map(str, mktu_filter))})" if mktu_filter else ""
 
-        if result.exact_match:
-            result.status = RiskLevel.RED
-            result.notes = f"Найден тождественный ТЗ{mktu_info}! Всего в базе: {total_marks} ТЗ"
-        elif result.similar_match and matches_in_mktu > 0:
-            result.status = RiskLevel.RED
-            result.notes = f"Найдены похожие ТЗ в классе МКТУ{mktu_info}: {matches_in_mktu} совпадений"
-        elif result.similar_match:
-            result.status = RiskLevel.YELLOW
-            result.notes = f"Найдены похожие ТЗ (всего {total_marks}), но не в выбранном классе{mktu_info}"
-        elif matches_in_mktu > 0:
-            result.status = RiskLevel.YELLOW
-            result.notes = f"Найдено {matches_in_mktu} ТЗ в классе{mktu_info}. Требуется анализ."
-        elif total_marks > 0 and not mktu_filter:
-            result.status = RiskLevel.YELLOW
-            result.notes = f"Найдено {total_marks} ТЗ с похожими названиями. Укажите класс МКТУ для точной проверки."
-        elif total_marks > 0:
-            result.status = RiskLevel.GREEN
-            result.notes = f"В классе{mktu_info} совпадений не найдено. Всего в базе: {total_marks} похожих ТЗ."
+        if mktu_filter:
+            # СТРОГИЙ РЕЖИМ: указаны классы МКТУ
+            if result.exact_match:
+                result.status = RiskLevel.RED
+                result.notes = f"🔴 ЗАПРЕЩЕНО: Найден тождественный ТЗ в классе{mktu_info}!"
+            elif result.similar_match and matches_in_mktu > 0:
+                result.status = RiskLevel.RED
+                result.notes = f"🔴 ВНИМАНИЕ: Найдено {matches_in_mktu} похожих ТЗ в классе{mktu_info}"
+            elif matches_in_mktu > 0:
+                result.status = RiskLevel.YELLOW
+                result.notes = f"🟡 Найдено {matches_in_mktu} ТЗ в классе{mktu_info}. Требуется анализ."
+            elif matches_outside_mktu > 0:
+                # Есть совпадения, но в других классах - это ЗЕЛЁНЫЙ для выбранного класса
+                result.status = RiskLevel.GREEN
+                result.notes = f"🟢 В классе{mktu_info} совпадений НЕТ. (В других классах: {matches_outside_mktu} ТЗ)"
+            elif total_marks > 0:
+                result.status = RiskLevel.GREEN
+                result.notes = f"🟢 В классе{mktu_info} совпадений НЕТ. (Всего в базе: {total_marks} похожих ТЗ в других классах)"
+            else:
+                result.status = RiskLevel.GREEN
+                result.notes = f"🟢 Совпадений в базе ТЗ РФ не найдено{mktu_info}"
         else:
-            result.status = RiskLevel.GREEN
-            result.notes = f"Совпадений в базе ТЗ РФ не найдено{mktu_info}"
+            # БЕЗ ФИЛЬТРА МКТУ: показываем всё
+            if result.exact_match:
+                result.status = RiskLevel.RED
+                result.notes = f"🔴 ЗАПРЕЩЕНО: Найден тождественный ТЗ! Всего в базе: {total_marks} ТЗ"
+            elif result.similar_match:
+                result.status = RiskLevel.YELLOW
+                result.notes = f"🟡 Найдены похожие ТЗ (всего {total_marks}). Укажите класс МКТУ для точной проверки."
+            elif total_marks > 0:
+                result.status = RiskLevel.YELLOW
+                result.notes = f"🟡 Найдено {total_marks} ТЗ с похожими названиями. Укажите класс МКТУ для точной проверки."
+            else:
+                result.status = RiskLevel.GREEN
+                result.notes = f"🟢 Совпадений в базе ТЗ РФ не найдено"
 
 
 class WIPOChecker(TrademarkChecker):
@@ -695,8 +962,7 @@ class ComprehensiveTrademarkChecker:
 
     def __init__(self):
         self.checkers = {
-            "linkmark": LinkmarkChecker(),
-            "wipo": WIPOChecker()
+            "linkmark": LinkmarkChecker()
         }
 
     def check_all(self, text: str, mktu_classes: List[int] = None,
@@ -714,11 +980,6 @@ class ComprehensiveTrademarkChecker:
         # Российские базы
         linkmark_result = self.checkers["linkmark"].check_trademark(text, mktu_classes)
         results.append(linkmark_result)
-
-        # Международные базы
-        if check_international:
-            wipo_result = self.checkers["wipo"].check_trademark(text, mktu_classes)
-            results.append(wipo_result)
 
         return results
 
@@ -740,10 +1001,6 @@ class ComprehensiveTrademarkChecker:
         """Генерация ссылок для ручной проверки"""
         links = {}
 
-        # ФИПС
-        links["ФИПС (реестр)"] = TRADEMARK_RESOURCES["fips"]["search_url"]
-        links["ФИПС (бюллетени)"] = TRADEMARK_RESOURCES["fips"]["bulletins_url"]
-
         # Платформа Роспатента
         rospatent_url = TRADEMARK_RESOURCES["rospatent_platform"]["url"]
         if mktu_classes:
@@ -752,15 +1009,14 @@ class ComprehensiveTrademarkChecker:
             params = {"q": text}
         links["Платформа Роспатента"] = f"{rospatent_url}?{urllib.parse.urlencode(params)}"
 
-        # Проверка ТЗ РФ (Linkmark)
-        links["Проверка ТЗ РФ"] = f"{TRADEMARK_RESOURCES['linkmark']['url']}?search={urllib.parse.quote(text)}"
+        # Проверка товарного знака (Linkmark)
+        links["Проверка товарного знака"] = f"{TRADEMARK_RESOURCES['linkmark']['url']}?search={urllib.parse.quote(text)}"
 
-        # WIPO
-        links["WIPO Global Brand"] = self.checkers["wipo"].get_manual_search_url(text)
-
-        # EUIPO
-        euipo_url = "https://euipo.europa.eu/eSearch/"
-        links["EUIPO"] = f"{euipo_url}#basic/1+1+1+1/100+100+100+100/{urllib.parse.quote(text)}"
+        # WIPO Global Brand Database (международная база)
+        wipo_params = {"brandName": text}
+        if mktu_classes:
+            wipo_params["niceClass"] = ",".join(map(str, mktu_classes))
+        links["WIPO Global Brand Database"] = f"https://branddb.wipo.int/en/quicksearch/brand?{urllib.parse.urlencode(wipo_params)}"
 
         return links
 

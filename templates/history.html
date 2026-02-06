@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>История проверок - IP Checker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --status-red: #FF4444;
+            --status-yellow: #FFBB33;
+            --status-green: #00C851;
+        }
+
+        body {
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, #4472C4 0%, #2E5090 100%);
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .status-red { background: var(--status-red); color: white; }
+        .status-yellow { background: var(--status-yellow); color: #333; }
+        .status-green { background: var(--status-green); color: white; }
+
+        .stat-card {
+            text-align: center;
+            padding: 15px;
+        }
+
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .stat-card .label {
+            color: #666;
+            margin-top: 5px;
+            font-size: 13px;
+        }
+
+        .stat-card.red .number { color: var(--status-red); }
+        .stat-card.yellow .number { color: var(--status-yellow); }
+        .stat-card.green .number { color: var(--status-green); }
+
+        .history-item {
+            border-left: 4px solid #ddd;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: white;
+            border-radius: 0 8px 8px 0;
+            transition: all 0.2s;
+        }
+
+        .history-item:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .history-item.status-red { border-left-color: var(--status-red); }
+        .history-item.status-yellow { border-left-color: var(--status-yellow); }
+        .history-item.status-green { border-left-color: var(--status-green); }
+
+        .history-item .time {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .history-item .query {
+            font-weight: 600;
+            font-size: 16px;
+            margin: 5px 0;
+        }
+
+        .history-item .details {
+            font-size: 13px;
+            color: #666;
+        }
+
+        .modal-xl { max-width: 900px; }
+
+        .detail-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .detail-section h6 {
+            color: #4472C4;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-shield-check me-2"></i>
+                Проверка ИС
+            </a>
+            <div class="d-flex align-items-center">
+                <a href="/" class="btn btn-outline-light btn-sm me-2">
+                    <i class="bi bi-house me-1"></i> Главная
+                </a>
+                <a href="/history" class="btn btn-light btn-sm">
+                    <i class="bi bi-clock-history me-1"></i> История
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container pb-5">
+        <h4 class="mb-4"><i class="bi bi-clock-history me-2"></i>История проверок</h4>
+
+        <!-- Статистика -->
+        <div class="row mb-4" id="statsContainer">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body stat-card">
+                        <div class="number" id="statTotal">0</div>
+                        <div class="label">Всего проверок</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body stat-card red">
+                        <div class="number" id="statRed">0</div>
+                        <div class="label">Запрещено</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body stat-card yellow">
+                        <div class="number" id="statYellow">0</div>
+                        <div class="label">Требует проверки</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body stat-card green">
+                        <div class="number" id="statGreen">0</div>
+                        <div class="label">Разрешено</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Табы -->
+        <ul class="nav nav-tabs" id="historyTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="names-tab" data-bs-toggle="tab" data-bs-target="#names" type="button">
+                    <i class="bi bi-fonts me-1"></i> Наименования
+                    <span class="badge bg-secondary ms-1" id="namesCount">0</span>
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="images-tab" data-bs-toggle="tab" data-bs-target="#images" type="button">
+                    <i class="bi bi-image me-1"></i> Изображения
+                    <span class="badge bg-secondary ms-1" id="imagesCount">0</span>
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content pt-3" id="historyTabsContent">
+            <!-- История наименований -->
+            <div class="tab-pane fade show active" id="names" role="tabpanel">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <select class="form-select form-select-sm" id="namesFilter" style="width: auto;">
+                        <option value="">Все статусы</option>
+                        <option value="red">Только запрещённые</option>
+                        <option value="yellow">Требуют проверки</option>
+                        <option value="green">Разрешённые</option>
+                    </select>
+                    <button class="btn btn-outline-danger btn-sm" onclick="clearHistory('name')">
+                        <i class="bi bi-trash me-1"></i>Очистить
+                    </button>
+                </div>
+                <div id="namesHistory">
+                    <div class="text-center text-muted py-5">
+                        <i class="bi bi-hourglass" style="font-size: 48px;"></i>
+                        <p class="mt-2">Загрузка...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- История изображений -->
+            <div class="tab-pane fade" id="images" role="tabpanel">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <select class="form-select form-select-sm" id="imagesFilter" style="width: auto;">
+                        <option value="">Все статусы</option>
+                        <option value="red">Только запрещённые</option>
+                        <option value="yellow">Требуют проверки</option>
+                        <option value="green">Разрешённые</option>
+                    </select>
+                    <button class="btn btn-outline-danger btn-sm" onclick="clearHistory('image')">
+                        <i class="bi bi-trash me-1"></i>Очистить
+                    </button>
+                </div>
+                <div id="imagesHistory">
+                    <div class="text-center text-muted py-5">
+                        <i class="bi bi-hourglass" style="font-size: 48px;"></i>
+                        <p class="mt-2">Загрузка...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно деталей -->
+    <div class="modal fade" id="detailModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Детали проверки</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="detailModalBody">
+                    <!-- Контент будет загружен динамически -->
+                </div>
+                <div class="modal-footer">
+                    <div class="btn-group">
+                        <button class="btn btn-success" id="exportExcelBtn">
+                            <i class="bi bi-file-earmark-excel me-1"></i>Excel
+                        </button>
+                        <button class="btn btn-danger" id="exportPdfBtn">
+                            <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+                        </button>
+                    </div>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentCheckType = null;
+        let currentCheckId = null;
+
+        // Загрузка статистики
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/history/stats');
+                const data = await response.json();
+
+                const totalNames = data.name_checks.total;
+                const totalImages = data.image_checks.total;
+                const total = totalNames + totalImages;
+
+                document.getElementById('statTotal').textContent = total;
+                document.getElementById('statRed').textContent =
+                    data.name_checks.red + data.image_checks.red;
+                document.getElementById('statYellow').textContent =
+                    data.name_checks.yellow + data.image_checks.yellow;
+                document.getElementById('statGreen').textContent =
+                    data.name_checks.green + data.image_checks.green;
+
+                document.getElementById('namesCount').textContent = totalNames;
+                document.getElementById('imagesCount').textContent = totalImages;
+            } catch (error) {
+                console.error('Ошибка загрузки статистики:', error);
+            }
+        }
+
+        // Загрузка истории наименований
+        async function loadNamesHistory(status = '') {
+            const container = document.getElementById('namesHistory');
+
+            try {
+                let url = '/api/history/names?limit=50';
+                if (status) url += `&status=${status}`;
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.checks.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center text-muted py-5">
+                            <i class="bi bi-inbox" style="font-size: 48px;"></i>
+                            <p class="mt-2">История пуста</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = '';
+                data.checks.forEach(check => {
+                    const statusLabel = {
+                        'red': 'ЗАПРЕЩЕНО',
+                        'yellow': 'ВНИМАНИЕ',
+                        'green': 'РАЗРЕШЕНО'
+                    }[check.overall_status] || check.overall_status;
+
+                    const date = new Date(check.created_at).toLocaleString('ru-RU');
+                    const mktu = check.mktu_classes.length > 0
+                        ? `МКТУ: ${check.mktu_classes.join(', ')}`
+                        : '';
+
+                    html += `
+                        <div class="history-item status-${check.overall_status}"
+                             onclick="showNameDetail(${check.id})" style="cursor: pointer;">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <div class="time">${date}</div>
+                                    <div class="query">${check.query_text}</div>
+                                    <div class="details">${mktu}</div>
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="status-badge status-${check.overall_status}">${statusLabel}</span>
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            onclick="event.stopPropagation(); deleteCheck('name', ${check.id})">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `
+                    <div class="alert alert-danger">
+                        Ошибка загрузки: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        // Загрузка истории изображений
+        async function loadImagesHistory(status = '') {
+            const container = document.getElementById('imagesHistory');
+
+            try {
+                let url = '/api/history/images?limit=50';
+                if (status) url += `&status=${status}`;
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.checks.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center text-muted py-5">
+                            <i class="bi bi-inbox" style="font-size: 48px;"></i>
+                            <p class="mt-2">История пуста</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = '';
+                data.checks.forEach(check => {
+                    const statusLabel = {
+                        'red': 'ЗАПРЕЩЕНО',
+                        'yellow': 'ВНИМАНИЕ',
+                        'green': 'РАЗРЕШЕНО'
+                    }[check.overall_status] || check.overall_status;
+
+                    const date = new Date(check.created_at).toLocaleString('ru-RU');
+                    const textsFound = check.recognized_texts?.length || 0;
+                    const risks = check.risk_factors?.length || 0;
+
+                    html += `
+                        <div class="history-item status-${check.overall_status}"
+                             onclick="showImageDetail(${check.id})" style="cursor: pointer;">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <div class="time">${date}</div>
+                                    <div class="query"><i class="bi bi-image me-1"></i>${check.filename}</div>
+                                    <div class="details">
+                                        Текстов: ${textsFound} | Рисков: ${risks}
+                                    </div>
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="status-badge status-${check.overall_status}">${statusLabel}</span>
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            onclick="event.stopPropagation(); deleteCheck('image', ${check.id})">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `
+                    <div class="alert alert-danger">
+                        Ошибка загрузки: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        // Показать детали проверки наименования
+        async function showNameDetail(id) {
+            currentCheckType = 'name';
+            currentCheckId = id;
+
+            try {
+                const response = await fetch(`/api/history/name/${id}`);
+                const check = await response.json();
+
+                const statusLabel = {
+                    'red': 'ЗАПРЕЩЕНО',
+                    'yellow': 'ТРЕБУЕТ ПРОВЕРКИ',
+                    'green': 'РАЗРЕШЕНО'
+                }[check.overall_status];
+
+                let html = `
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="detail-section">
+                                <h6><i class="bi bi-info-circle me-1"></i>Основная информация</h6>
+                                <p><strong>Запрос:</strong> ${check.query_text}</p>
+                                <p><strong>Классы МКТУ:</strong> ${check.mktu_classes.join(', ') || '-'}</p>
+                                <p><strong>Дата:</strong> ${new Date(check.created_at).toLocaleString('ru-RU')}</p>
+                                <p><strong>Статус:</strong>
+                                    <span class="status-badge status-${check.overall_status}">${statusLabel}</span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="detail-section">
+                                <h6><i class="bi bi-link-45deg me-1"></i>Ссылки для проверки</h6>
+                                ${Object.entries(check.manual_links || {}).map(([name, url]) =>
+                                    `<a href="${url}" target="_blank" class="btn btn-sm btn-outline-primary me-1 mb-1">${name}</a>`
+                                ).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                // Результаты проверки
+                if (check.results && check.results.length > 0) {
+                    html += `
+                        <div class="detail-section">
+                            <h6><i class="bi bi-search me-1"></i>Результаты проверки</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Ресурс</th>
+                                            <th>Статус</th>
+                                            <th>Примечания</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                    `;
+                    check.results.forEach(r => {
+                        const rStatus = r.status === 'red' ? 'НАЙДЕНО' :
+                                       r.status === 'yellow' ? 'ПОХОЖЕ' : 'НЕ НАЙДЕНО';
+                        html += `
+                            <tr>
+                                <td>${r.resource}</td>
+                                <td><span class="status-badge status-${r.status}">${rStatus}</span></td>
+                                <td>${r.notes || '-'}</td>
+                            </tr>
+                        `;
+                    });
+                    html += `
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                document.getElementById('detailModalBody').innerHTML = html;
+                new bootstrap.Modal(document.getElementById('detailModal')).show();
+            } catch (error) {
+                alert('Ошибка загрузки: ' + error.message);
+            }
+        }
+
+        // Показать детали проверки изображения
+        async function showImageDetail(id) {
+            currentCheckType = 'image';
+            currentCheckId = id;
+
+            try {
+                const response = await fetch(`/api/history/image/${id}`);
+                const check = await response.json();
+
+                const statusLabel = {
+                    'red': 'ЗАПРЕЩЕНО',
+                    'yellow': 'ТРЕБУЕТ ПРОВЕРКИ',
+                    'green': 'РАЗРЕШЕНО'
+                }[check.overall_status];
+
+                let html = `
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="detail-section">
+                                <h6><i class="bi bi-info-circle me-1"></i>Основная информация</h6>
+                                <p><strong>Файл:</strong> ${check.filename}</p>
+                                <p><strong>Дата:</strong> ${new Date(check.created_at).toLocaleString('ru-RU')}</p>
+                                <p><strong>Статус:</strong>
+                                    <span class="status-badge status-${check.overall_status}">${statusLabel}</span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="detail-section">
+                                <h6><i class="bi bi-fonts me-1"></i>Распознанные тексты</h6>
+                                ${check.recognized_texts && check.recognized_texts.length > 0
+                                    ? check.recognized_texts.map(t =>
+                                        `<span class="badge bg-secondary me-1">${t.text} (${t.confidence}%)</span>`
+                                    ).join('')
+                                    : '<span class="text-muted">Текст не распознан</span>'
+                                }
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                // Факторы риска
+                if (check.risk_factors && check.risk_factors.length > 0) {
+                    html += `
+                        <div class="detail-section">
+                            <h6><i class="bi bi-exclamation-triangle me-1"></i>Факторы риска</h6>
+                            <ul class="mb-0">
+                                ${check.risk_factors.map(r =>
+                                    `<li class="${r.severity === 'red' ? 'text-danger' : 'text-warning'}">${r.message}</li>`
+                                ).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                // Рекомендации
+                if (check.recommendations && check.recommendations.length > 0) {
+                    html += `
+                        <div class="detail-section">
+                            <h6><i class="bi bi-lightbulb me-1"></i>Рекомендации</h6>
+                            <ul class="mb-0">
+                                ${check.recommendations.map(r => `<li>${r}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                document.getElementById('detailModalBody').innerHTML = html;
+                new bootstrap.Modal(document.getElementById('detailModal')).show();
+            } catch (error) {
+                alert('Ошибка загрузки: ' + error.message);
+            }
+        }
+
+        // Удаление проверки
+        async function deleteCheck(type, id) {
+            if (!confirm('Удалить эту проверку из истории?')) return;
+
+            try {
+                const response = await fetch(`/api/history/delete/${type}/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    loadStats();
+                    if (type === 'name') {
+                        loadNamesHistory(document.getElementById('namesFilter').value);
+                    } else {
+                        loadImagesHistory(document.getElementById('imagesFilter').value);
+                    }
+                } else {
+                    alert('Ошибка удаления');
+                }
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
+            }
+        }
+
+        // Очистка истории
+        async function clearHistory(type) {
+            const typeName = type === 'name' ? 'наименований' : 'изображений';
+            if (!confirm(`Очистить всю историю проверок ${typeName}?`)) return;
+
+            try {
+                const response = await fetch(`/api/history/clear?type=${type}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    loadStats();
+                    if (type === 'name') {
+                        loadNamesHistory();
+                    } else {
+                        loadImagesHistory();
+                    }
+                }
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
+            }
+        }
+
+        // Экспорт
+        document.getElementById('exportExcelBtn').addEventListener('click', () => {
+            if (currentCheckType && currentCheckId) {
+                window.location.href = `/api/export/${currentCheckType}/${currentCheckId}/excel`;
+            }
+        });
+
+        document.getElementById('exportPdfBtn').addEventListener('click', () => {
+            if (currentCheckType && currentCheckId) {
+                window.location.href = `/api/export/${currentCheckType}/${currentCheckId}/pdf`;
+            }
+        });
+
+        // Фильтры
+        document.getElementById('namesFilter').addEventListener('change', (e) => {
+            loadNamesHistory(e.target.value);
+        });
+
+        document.getElementById('imagesFilter').addEventListener('change', (e) => {
+            loadImagesHistory(e.target.value);
+        });
+
+        // Инициализация
+        loadStats();
+        loadNamesHistory();
+        loadImagesHistory();
+    </script>
+</body>
+</html>

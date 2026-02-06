@@ -42,6 +42,10 @@ class SerperImageSearch:
     API_URL = "https://google.serper.dev/images"
     LENS_URL = "https://google.serper.dev/lens"
 
+    # Бесплатные сервисы для временной загрузки изображений
+    IMGBB_API_URL = "https://api.imgbb.com/1/upload"
+    IMGBB_API_KEY = "f09dbf205b2bdfc41aef51fce3ef8291"  # Бесплатный публичный ключ
+
     def __init__(self, api_key: str = None):
         self.api_key = api_key or API_KEYS.get("serper", os.environ.get("SERPER_API_KEY", ""))
         self.session = requests.Session()
@@ -51,9 +55,109 @@ class SerperImageSearch:
                 "Content-Type": "application/json"
             })
 
+    def _upload_to_temp_hosting(self, image_path: str) -> Optional[str]:
+        """
+        Загружает изображение на временный хостинг и возвращает URL
+        Пробует несколько сервисов по очереди
+        """
+        # Список сервисов для загрузки (в порядке приоритета)
+        upload_services = [
+            self._upload_to_imgbb,  # ImgBB - надёжный и бесплатный
+            self._upload_to_freeimage,
+            self._upload_to_0x0,
+        ]
+
+        for upload_func in upload_services:
+            try:
+                url = upload_func(image_path)
+                if url:
+                    return url
+            except Exception as e:
+                print(f"[Serper] Сервис загрузки не доступен: {e}")
+                continue
+
+        return None
+
+    def _upload_to_imgbb(self, image_path: str) -> Optional[str]:
+        """Загрузка на imgbb.com (надёжный бесплатный хостинг)"""
+        try:
+            import base64
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+
+            response = requests.post(
+                self.IMGBB_API_URL,
+                data={
+                    'key': self.IMGBB_API_KEY,
+                    'image': image_data,
+                    'expiration': 600  # Истекает через 10 минут
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('success'):
+                    url = result['data']['url']
+                    print(f"[Serper] Загружено на imgbb: {url[:60]}...")
+                    return url
+
+            return None
+        except Exception as e:
+            print(f"[Serper] imgbb error: {e}")
+            return None
+
+    def _upload_to_freeimage(self, image_path: str) -> Optional[str]:
+        """Загрузка на freeimage.host (бесплатно)"""
+        try:
+            with open(image_path, 'rb') as f:
+                files = {'source': f}
+                data = {'type': 'file', 'action': 'upload'}
+
+                response = requests.post(
+                    'https://freeimage.host/api/1/upload',
+                    data={'key': '6d207e02198a847aa98d0a2a901485a5', **data},
+                    files=files,
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('status_code') == 200:
+                        url = result['image']['url']
+                        print(f"[Serper] Загружено на freeimage: {url[:60]}...")
+                        return url
+
+            return None
+        except Exception as e:
+            print(f"[Serper] freeimage error: {e}")
+            return None
+
+    def _upload_to_0x0(self, image_path: str) -> Optional[str]:
+        """Загрузка на 0x0.st (минималистичный хостинг)"""
+        try:
+            with open(image_path, 'rb') as f:
+                response = requests.post(
+                    'https://0x0.st',
+                    files={'file': f},
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    url = response.text.strip()
+                    if url.startswith('http'):
+                        print(f"[Serper] Загружено на 0x0.st: {url}")
+                        return url
+
+            return None
+        except Exception as e:
+            print(f"[Serper] 0x0.st error: {e}")
+            return None
+
     def search_by_image(self, image_path: str) -> ImageSearchResult:
         """
         Обратный поиск изображения через Google Lens (Serper)
+        Использует временный хостинг изображений для загрузки
         """
         result = ImageSearchResult(
             resource_name="Google Images (Serper.dev)",
@@ -66,27 +170,18 @@ class SerperImageSearch:
             return result
 
         try:
-            # Читаем изображение и кодируем в base64
-            with open(image_path, 'rb') as f:
-                image_data = base64.b64encode(f.read()).decode('utf-8')
+            # Загружаем изображение на временный хостинг (imgbb.com - бесплатный)
+            image_url = self._upload_to_temp_hosting(image_path)
 
-            # Определяем MIME-тип
-            ext = Path(image_path).suffix.lower()
-            mime_types = {
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.png': 'image/png',
-                '.gif': 'image/gif',
-                '.webp': 'image/webp'
-            }
-            mime_type = mime_types.get(ext, 'image/jpeg')
-
-            # Формируем data URL для Google Lens API
-            data_url = f"data:{mime_type};base64,{image_data}"
+            if not image_url:
+                # Альтернатива: попробуем через поиск по тексту из OCR
+                result.notes = "Не удалось загрузить изображение для поиска. Используйте ручную проверку."
+                result.status = RiskLevel.YELLOW
+                return result
 
             # Запрос к Serper Lens API
             payload = {
-                "url": data_url,
+                "url": image_url,
                 "gl": "ru",  # Регион - Россия
                 "hl": "ru"   # Язык - русский
             }
@@ -122,8 +217,17 @@ class SerperImageSearch:
     def _parse_lens_results(self, result: ImageSearchResult, data: Dict):
         """Парсинг результатов Google Lens через Serper"""
 
-        # Визуальные совпадения
+        print(f"[Serper] Получен ответ API, ключи: {list(data.keys())}")
+
+        # Serper Lens API возвращает результаты в разных полях в зависимости от версии
+        organic_results = data.get("organic", [])
         visual_matches = data.get("visual_matches", [])
+        image_sources = data.get("image_sources", [])
+        reverse_image_search = data.get("reverse_image_search", [])
+
+        # Объединяем все источники результатов
+        all_results = organic_results + visual_matches + image_sources + reverse_image_search
+
         # Точные совпадения изображения
         exact_matches = data.get("exact_matches", [])
         # Похожие изображения
@@ -131,7 +235,11 @@ class SerperImageSearch:
         # Источники знаний (бренды, продукты)
         knowledge_graph = data.get("knowledgeGraph", {})
 
-        result.total_results = len(visual_matches) + len(exact_matches) + len(similar_images)
+        print(f"[Serper] Найдено: organic={len(organic_results)}, visual={len(visual_matches)}, "
+              f"image_sources={len(image_sources)}, reverse={len(reverse_image_search)}")
+
+        result.total_results = len(all_results) + len(exact_matches) + len(similar_images)
+        visual_matches = all_results  # Используем объединённые результаты
         result.exact_matches = len(exact_matches)
 
         # Собираем все найденные источники
@@ -151,40 +259,63 @@ class SerperImageSearch:
                 "title": match.get("title", ""),
                 "link": match.get("link", ""),
                 "source": match.get("source", ""),
-                "thumbnail": match.get("thumbnail", ""),
+                "thumbnail": match.get("thumbnail", match.get("thumbnailUrl", match.get("imageUrl", ""))),
                 "position": match.get("position", 0)
             })
 
-        # Проверяем Knowledge Graph на известные бренды
+        # Проверяем Knowledge Graph и organic результаты на известные бренды
         detected_brands = []
+
+        # Список известных брендов для проверки
+        brand_keywords = [
+            'nike', 'adidas', 'puma', 'gucci', 'chanel', 'louis vuitton',
+            'supreme', 'versace', 'prada', 'dior', 'balenciaga', 'hermes',
+            'burberry', 'fendi', 'off-white', 'givenchy', 'valentino',
+            'armani', 'dolce', 'gabbana', 'yves saint laurent', 'cartier',
+            'rolex', 'omega', 'tissot', 'lacoste', 'tommy hilfiger', 'calvin klein',
+            'ralph lauren', 'hugo boss', 'michael kors', 'coach', 'kate spade'
+        ]
+
+        # Проверяем Knowledge Graph
         if knowledge_graph:
             title = knowledge_graph.get("title", "").lower()
             description = knowledge_graph.get("description", "").lower()
-
-            # Список известных брендов для проверки
-            brand_keywords = [
-                'nike', 'adidas', 'puma', 'gucci', 'chanel', 'louis vuitton',
-                'supreme', 'versace', 'prada', 'dior', 'balenciaga', 'hermes',
-                'burberry', 'fendi', 'off-white', 'givenchy', 'valentino'
-            ]
-
             for brand in brand_keywords:
                 if brand in title or brand in description:
                     detected_brands.append(brand.upper())
 
+        # Проверяем organic результаты на упоминание брендов
+        all_text = ""
+        for match in visual_matches[:20]:
+            all_text += " " + match.get("title", "").lower()
+            all_text += " " + match.get("source", "").lower()
+
+        for brand in brand_keywords:
+            if brand in all_text and brand.upper() not in detected_brands:
+                # Считаем сколько раз упоминается бренд
+                count = all_text.count(brand)
+                if count >= 2:  # Если упоминается минимум 2 раза - это вероятно бренд
+                    detected_brands.append(brand.upper())
+
         # Определяем статус
-        if result.exact_matches > 0:
-            result.status = RiskLevel.RED
-            result.notes = f"⚠️ ВНИМАНИЕ! Найдено {result.exact_matches} точных совпадений изображения в интернете!"
-            if detected_brands:
-                result.notes += f" Обнаружены бренды: {', '.join(detected_brands)}"
-        elif detected_brands:
+        # КРАСНЫЙ: бренды, много совпадений (>5), или точные совпадения
+        # ЖЁЛТЫЙ: мало совпадений (1-5)
+        # ЗЕЛЁНЫЙ: нет совпадений
+
+        if detected_brands:
             result.status = RiskLevel.RED
             result.notes = f"⚠️ Обнаружены известные бренды: {', '.join(detected_brands)}"
-        elif len(visual_matches) > 10:
-            result.status = RiskLevel.YELLOW
-            result.notes = f"Найдено {len(visual_matches)} визуальных совпадений. Рекомендуется проверка."
+            if len(visual_matches) > 0:
+                result.notes += f" Найдено {len(visual_matches)} похожих товаров."
+        elif result.exact_matches > 0:
+            result.status = RiskLevel.RED
+            result.notes = f"⚠️ ВНИМАНИЕ! Найдено {result.exact_matches} точных совпадений изображения в интернете!"
+        elif len(visual_matches) > 5:
+            # Много похожих изображений = высокий риск (изображение уже используется)
+            result.status = RiskLevel.RED
+            result.notes = f"⚠️ ВНИМАНИЕ! Найдено {len(visual_matches)} похожих изображений в интернете. Изображение не уникально!"
         elif len(visual_matches) > 0:
+            # Мало совпадений - требуется проверка
             result.status = RiskLevel.YELLOW
             result.notes = f"Найдено {len(visual_matches)} похожих изображений. Проверьте источники."
         else:
@@ -699,19 +830,7 @@ class ComprehensiveImageSearcher:
                     notes=f"Ошибка: {str(e)}"
                 ))
 
-        # 3. TinEye (дополнительная проверка точных совпадений)
-        try:
-            tineye_result = self.tineye.search(image_path)
-            results.append(tineye_result)
-        except Exception as e:
-            results.append(ImageSearchResult(
-                resource_name="TinEye",
-                resource_url="https://tineye.com",
-                status=RiskLevel.YELLOW,
-                notes=f"Ошибка TinEye: {str(e)}"
-            ))
-
-        # 4. Если API не использовались - добавляем ссылки для ручной проверки
+        # 3. Если API не использовались - добавляем ссылки для ручной проверки
         if not api_used:
             search_urls = self.direct.generate_search_urls(image_path)
 
@@ -733,17 +852,6 @@ class ComprehensiveImageSearcher:
                         status=RiskLevel.YELLOW,
                         notes=f"Требуется ручная проверка. Перейдите на {url} и загрузите изображение."
                     ))
-
-        # 5. Проверка уникальности по метаданным
-        uniqueness = self.direct.check_image_uniqueness(image_path)
-
-        uniqueness_result = ImageSearchResult(
-            resource_name="Анализ метаданных",
-            resource_url="",
-            status=RiskLevel.GREEN if uniqueness["is_likely_unique"] else RiskLevel.YELLOW,
-            notes="; ".join(uniqueness["checks_performed"])
-        )
-        results.append(uniqueness_result)
 
         return results
 

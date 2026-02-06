@@ -27,7 +27,7 @@ API_KEYS = {
     # Serper.dev - РЕКОМЕНДУЕТСЯ для поиска изображений
     # 2500 бесплатных запросов, затем $0.30/1000 (в 10 раз дешевле SerpAPI)
     # Регистрация: https://serper.dev/
-    "serper": os.environ.get("SERPER_API_KEY", ""),
+    "serper": os.environ.get("SERPER_API_KEY", "ee7b6a8f2c9bfeecbe657400fa3e3df26e6ef3e3"),
 }
 
 
@@ -92,20 +92,19 @@ TRADEMARK_RESOURCES = {
         "free": True,
         "limitations": "Данные из базы ФИПС/Роспатента"
     },
-    "wipo": {
-        "name": "WIPO Global Brand Database",
-        "url": "https://branddb.wipo.int/",
-        "search_url": "https://branddb.wipo.int/en/similarname",
-        "description": "Международная база товарных знаков",
-        "free": True,
-        "limitations": None
-    },
     "euipo": {
         "name": "EUIPO",
         "url": "https://euipo.europa.eu/",
         "description": "База товарных знаков ЕС (если товар доступен за рубежом)",
         "free": True,
         "limitations": "Только для товаров, доступных в ЕС"
+    },
+    "wipo": {
+        "name": "WIPO Global Brand Database",
+        "url": "https://branddb.wipo.int/",
+        "description": "Международная база товарных знаков",
+        "free": True,
+        "limitations": "Только зарегистрированные международные ТЗ"
     }
 }
 
@@ -122,12 +121,6 @@ IMAGE_SEARCH_RESOURCES = {
         "url": "https://images.google.ru/",
         "description": "Reverse image search",
         "priority": 2
-    },
-    "tineye": {
-        "name": "TinEye",
-        "url": "https://tineye.com/",
-        "description": "Специализированный сервис обратного поиска изображений",
-        "priority": 3
     },
     "bing": {
         "name": "Bing Visual Search",

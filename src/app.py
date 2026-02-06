@@ -24,8 +24,15 @@ from models import ProductItem, CheckSession, ImageSource, RiskLevel
 from data_loader import DataLoader, TemplateGenerator
 from trademark_checker import ComprehensiveTrademarkChecker
 from image_checker import ComprehensiveImageChecker
+from image_search_api import ComprehensiveImageSearcher
 from risk_evaluator import RiskEvaluator, RiskAssessment
 from export_manager import ExportManager
+from database import (
+    save_name_check, save_image_check,
+    get_name_checks, get_image_checks,
+    get_name_check_by_id, get_image_check_by_id,
+    get_statistics, delete_check, clear_history
+)
 
 # Инициализация Flask
 app = Flask(__name__,
@@ -43,6 +50,7 @@ Path(app.config['UPLOAD_FOLDER']).mkdir(parents=True, exist_ok=True)
 data_loader = DataLoader()
 trademark_checker = ComprehensiveTrademarkChecker()
 image_checker = ComprehensiveImageChecker()
+image_searcher = ComprehensiveImageSearcher()  # Автоматический поиск изображений
 risk_evaluator = RiskEvaluator()
 export_manager = ExportManager()
 
@@ -214,7 +222,7 @@ def check_single():
                     'similar_match': r.similar_match,
                     'similarity_score': r.similarity_score,
                     'notes': r.notes,
-                    'matches': r.found_matches[:5]  # Первые 5 совпадений
+                    'matches': r.found_matches[:15]  # До 15 совпадений
                 }
                 for r in tm_results
             ]
@@ -255,6 +263,19 @@ def check_single():
             results['overall_status'] = 'red'
         elif has_yellow:
             results['overall_status'] = 'yellow'
+
+        # Сохраняем в историю
+        try:
+            check_id = save_name_check(
+                query_text=text_to_check,
+                mktu_classes=mktu_classes,
+                overall_status=results['overall_status'],
+                results=results['trademark_results'],
+                manual_links=results['manual_check_links']
+            )
+            results['check_id'] = check_id
+        except Exception as e:
+            print(f"Ошибка сохранения в историю: {e}")
 
         return jsonify(results)
 
@@ -493,10 +514,22 @@ def check_image_full():
         try:
             img_check = image_checker.check_image(str(filepath))
 
-            # Получаем распознанный текст
+            # Получаем распознанный текст (фильтруем по уверенности >= 55%)
+            # НЕ показываем ненадёжные распознавания - они дают случайные результаты
             for text_item in img_check.get('recognized_texts', []):
+                # Строгий фильтр: только уверенные распознавания (55%+)
+                if text_item.confidence < 0.55:
+                    continue  # Пропускаем ненадёжные распознавания
+
+                text_clean = text_item.text.strip()
+                # Дополнительная фильтрация мусора
+                if len(text_clean) < 3:
+                    continue
+                if not any(c.isalpha() for c in text_clean):
+                    continue
+
                 result['recognized_texts'].append({
-                    'text': text_item.text,
+                    'text': text_clean,
                     'confidence': round(text_item.confidence * 100, 1)
                 })
 
@@ -522,12 +555,12 @@ def check_image_full():
         texts_to_check = []
         texts_to_check_lower = set()  # Для дедупликации
 
-        # Добавляем ручной текст
+        # Добавляем ручной текст (имеет приоритет)
         if manual_text:
             texts_to_check.append(manual_text)
             texts_to_check_lower.add(manual_text.lower())
 
-        # Добавляем распознанный текст
+        # Добавляем ТОЛЬКО уверенно распознанный текст (порог уже применён выше)
         for text_item in result['recognized_texts']:
             full_text = text_item['text'].strip()
 
@@ -544,7 +577,8 @@ def check_image_full():
                     texts_to_check.append(clean_word)
                     texts_to_check_lower.add(clean_word.lower())
 
-        # 2.1. Проверка на известные бренды с учётом опечаток OCR
+        # 2.1. Детекция известных брендов по ВСЕМ распознаниям (включая низкоуверенные)
+        # Это для предупреждения, но НЕ для автоматического поиска ТЗ
         KNOWN_BRANDS_PATTERNS = {
             'nike': ['nike', 'nke', 'nik', 'nikе', 'niке', 'nіke', 'n1ke', 'nikel'],
             'adidas': ['adidas', 'adldas', 'adіdas', 'ad1das'],
@@ -553,29 +587,49 @@ def check_image_full():
             'chanel': ['chanel', 'сhanel', 'chanеl'],
             'louis vuitton': ['vuitton', 'vuіtton', 'lv'],
             'supreme': ['supreme', 'suprеme', 'suprеmе'],
+            'champion': ['champion', 'champ1on', 'сhampion', 'champi0n', 'lkpio', 'ckpio', 'chpio'],
         }
 
-        all_recognized_text = ' '.join([t['text'] for t in result['recognized_texts']]).lower()
+        # Собираем ВСЕ распознанные тексты (включая низкоуверенные) для детекции брендов
+        all_raw_texts = []
+        for text_item in img_check.get('recognized_texts', []):
+            if text_item.confidence > 0.15:  # Минимальный порог для детекции брендов
+                all_raw_texts.append(text_item.text.lower())
+        all_recognized_text = ' '.join(all_raw_texts)
+
         # Нормализуем текст (заменяем похожие символы)
         normalized_text = all_recognized_text.replace('к', 'k').replace('е', 'e').replace('і', 'i').replace('а', 'a').replace('о', 'o').replace('с', 'c').replace('р', 'p').replace('в', 'b')
 
+        detected_brands = []
         for brand, patterns in KNOWN_BRANDS_PATTERNS.items():
             for pattern in patterns:
                 if pattern in normalized_text or pattern in all_recognized_text:
-                    # Нашли бренд - добавляем его для проверки
-                    if brand.upper() not in texts_to_check and brand not in texts_to_check_lower:
-                        texts_to_check.insert(0, brand.upper())  # В начало списка
-                        texts_to_check_lower.add(brand)
-                        result['risk_factors'].append({
-                            'type': 'brand_detected',
-                            'severity': 'red',
-                            'message': f"Обнаружен известный бренд: {brand.upper()} (распознано как: '{all_recognized_text[:50]}')"
-                        })
+                    detected_brands.append(brand.upper())
+                    # НЕ добавляем автоматически в texts_to_check - просто предупреждаем
+                    result['risk_factors'].append({
+                        'type': 'brand_detected',
+                        'severity': 'yellow',  # Жёлтый, т.к. OCR не уверен
+                        'message': f"⚠️ Возможно обнаружен бренд: {brand.upper()} (OCR распознал: '{all_recognized_text[:30]}...'). Рекомендуется проверить вручную."
+                    })
                     break
 
-        # 3. Поиск по товарным знакам
+        # Если ручной текст не введён И OCR ничего уверенного не нашёл
+        if not texts_to_check and not manual_text:
+            result['recommendations'].append(
+                "⚠️ OCR не смог уверенно распознать текст на изображении. "
+                "Если на изображении есть надписи, введите их вручную для проверки товарных знаков."
+            )
+
+        # 3. Поиск по товарным знакам (только если есть надёжный текст)
         all_tm_results = []
         checked_texts = []
+
+        # Пропускаем поиск ТЗ если нет надёжного текста
+        if not texts_to_check:
+            result['recommendations'].append(
+                "ℹ️ Проверка товарных знаков не выполнена - нет текста для поиска. "
+                "Введите текст вручную, если хотите проверить конкретное название."
+            )
 
         for text in texts_to_check[:5]:  # Максимум 5 проверок
             try:
@@ -621,7 +675,53 @@ def check_image_full():
                 checked_texts[0], mktu_classes
             )
 
-        # 5. Ссылки для обратного поиска изображений
+        # 5. Автоматический поиск изображений через API
+        result['image_search_results'] = []
+        result['image_search_links'] = {}
+
+        try:
+            # Выполняем автоматический поиск через Serper API
+            search_results = image_searcher.search_all(str(filepath), use_api=True)
+
+            for sr in search_results:
+                search_result_data = {
+                    'resource': sr.resource_name,
+                    'url': sr.resource_url,
+                    'status': sr.status.value if hasattr(sr.status, 'value') else str(sr.status),
+                    'notes': sr.notes,
+                    'total_results': sr.total_results,
+                    'exact_matches': sr.exact_matches,
+                    'similar_images': sr.similar_images[:5] if sr.similar_images else [],
+                    'known_sources': sr.known_sources[:5] if sr.known_sources else []
+                }
+                result['image_search_results'].append(search_result_data)
+
+                # Если найдены совпадения - добавляем в факторы риска
+                if sr.status == RiskLevel.RED:
+                    result['risk_factors'].append({
+                        'type': 'image_search',
+                        'severity': 'red',
+                        'message': f"🔍 {sr.resource_name}: {sr.notes}"
+                    })
+                elif sr.status == RiskLevel.YELLOW and sr.total_results > 0:
+                    result['risk_factors'].append({
+                        'type': 'image_search',
+                        'severity': 'yellow',
+                        'message': f"🔍 {sr.resource_name}: {sr.notes}"
+                    })
+
+        except Exception as e:
+            error_msg = str(e)
+            # Улучшенное сообщение об ошибке подключения
+            if 'Connection' in error_msg or 'timeout' in error_msg.lower():
+                result['recommendations'].append(
+                    "⚠️ Не удалось выполнить автоматический поиск изображений (ошибка подключения). "
+                    "Пожалуйста, используйте ссылки ниже для ручной проверки."
+                )
+            else:
+                result['recommendations'].append(f"⚠️ Ошибка поиска изображений: {error_msg}")
+
+        # Ссылки для ручной проверки (резервный вариант)
         result['image_search_links'] = {
             'yandex': {
                 'name': 'Яндекс.Картинки',
@@ -632,11 +732,6 @@ def check_image_full():
                 'name': 'Google Images',
                 'url': 'https://images.google.com/',
                 'instruction': 'Нажмите на иконку камеры и загрузите изображение'
-            },
-            'tineye': {
-                'name': 'TinEye',
-                'url': 'https://tineye.com/',
-                'instruction': 'Загрузите изображение для поиска копий'
             },
             'bing': {
                 'name': 'Bing Visual Search',
@@ -689,6 +784,23 @@ def check_image_full():
             'risk_factors_count': len(result['risk_factors'])
         }
 
+        # 9. Сохраняем в историю
+        try:
+            check_id = save_image_check(
+                filename=filename,
+                filepath=str(filepath),
+                overall_status=result['overall_status'],
+                recognized_texts=result['recognized_texts'],
+                trademark_results=result['trademark_results'],
+                image_search_results=result.get('image_search_results', []),
+                risk_factors=result['risk_factors'],
+                recommendations=result['recommendations'],
+                summary=result['summary']
+            )
+            result['check_id'] = check_id
+        except Exception as e:
+            print(f"Ошибка сохранения в историю: {e}")
+
         return jsonify(result)
 
     except Exception as e:
@@ -703,6 +815,456 @@ def check_image_full():
 def serve_upload(filename):
     """Отдача загруженных файлов"""
     return send_file(Path(app.config['UPLOAD_FOLDER']) / filename)
+
+
+# ==================== ИСТОРИЯ ПРОВЕРОК ====================
+
+@app.route('/history')
+def history_page():
+    """Страница истории проверок"""
+    return render_template('history.html',
+                          mktu_classes=MKTU_CLASSES,
+                          trademark_resources=TRADEMARK_RESOURCES,
+                          image_resources=IMAGE_SEARCH_RESOURCES)
+
+
+@app.route('/api/history/stats')
+def get_history_stats():
+    """Получить статистику проверок"""
+    try:
+        stats = get_statistics()
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/names')
+def get_name_history():
+    """Получить историю проверок наименований"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        status = request.args.get('status', None)
+
+        checks = get_name_checks(limit=limit, offset=offset, status_filter=status)
+        return jsonify({'checks': checks})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/images')
+def get_image_history():
+    """Получить историю проверок изображений"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        status = request.args.get('status', None)
+
+        checks = get_image_checks(limit=limit, offset=offset, status_filter=status)
+        return jsonify({'checks': checks})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/name/<int:check_id>')
+def get_name_check_detail(check_id):
+    """Получить детали проверки наименования"""
+    try:
+        check = get_name_check_by_id(check_id)
+        if not check:
+            return jsonify({'error': 'Проверка не найдена'}), 404
+        return jsonify(check)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/image/<int:check_id>')
+def get_image_check_detail(check_id):
+    """Получить детали проверки изображения"""
+    try:
+        check = get_image_check_by_id(check_id)
+        if not check:
+            return jsonify({'error': 'Проверка не найдена'}), 404
+        return jsonify(check)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/delete/<check_type>/<int:check_id>', methods=['DELETE'])
+def delete_history_check(check_type, check_id):
+    """Удалить проверку из истории"""
+    try:
+        if check_type not in ['name', 'image']:
+            return jsonify({'error': 'Неверный тип проверки'}), 400
+
+        success = delete_check(check_type, check_id)
+        if success:
+            return jsonify({'success': True})
+        return jsonify({'error': 'Проверка не найдена'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/clear', methods=['DELETE'])
+def clear_all_history():
+    """Очистить всю историю"""
+    try:
+        check_type = request.args.get('type', None)
+        deleted = clear_history(check_type)
+        return jsonify({'success': True, 'deleted': deleted})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== ЭКСПОРТ ОТЧЁТОВ ====================
+
+@app.route('/api/export/image/<int:check_id>/<format>')
+def export_image_report(check_id, format):
+    """Экспорт отчёта по проверке изображения"""
+    try:
+        check = get_image_check_by_id(check_id)
+        if not check:
+            return jsonify({'error': 'Проверка не найдена'}), 404
+
+        if format == 'excel':
+            filepath = export_image_to_excel(check)
+            return send_file(filepath, as_attachment=True,
+                           download_name=f"report_image_{check_id}.xlsx")
+        elif format == 'pdf':
+            filepath = export_image_to_pdf(check)
+            return send_file(filepath, as_attachment=True,
+                           download_name=f"report_image_{check_id}.pdf")
+        elif format == 'json':
+            return jsonify(check)
+        else:
+            return jsonify({'error': 'Неподдерживаемый формат'}), 400
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/export/name/<int:check_id>/<format>')
+def export_name_report(check_id, format):
+    """Экспорт отчёта по проверке наименования"""
+    try:
+        check = get_name_check_by_id(check_id)
+        if not check:
+            return jsonify({'error': 'Проверка не найдена'}), 404
+
+        if format == 'excel':
+            filepath = export_name_to_excel(check)
+            return send_file(filepath, as_attachment=True,
+                           download_name=f"report_name_{check_id}.xlsx")
+        elif format == 'pdf':
+            filepath = export_name_to_pdf(check)
+            return send_file(filepath, as_attachment=True,
+                           download_name=f"report_name_{check_id}.pdf")
+        elif format == 'json':
+            return jsonify(check)
+        else:
+            return jsonify({'error': 'Неподдерживаемый формат'}), 400
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def export_image_to_excel(check: Dict) -> str:
+    """Экспорт проверки изображения в Excel"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Отчёт проверки"
+
+    # Стили
+    header_font = Font(bold=True, size=14)
+    status_fills = {
+        'red': PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid"),
+        'yellow': PatternFill(start_color="FFE66D", end_color="FFE66D", fill_type="solid"),
+        'green': PatternFill(start_color="6BCB77", end_color="6BCB77", fill_type="solid")
+    }
+
+    row = 1
+
+    # Заголовок
+    ws.cell(row=row, column=1, value="ОТЧЁТ О ПРОВЕРКЕ ИЗОБРАЖЕНИЯ").font = Font(bold=True, size=16)
+    row += 2
+
+    # Основная информация
+    ws.cell(row=row, column=1, value="Файл:").font = header_font
+    ws.cell(row=row, column=2, value=check.get('filename', '-'))
+    row += 1
+
+    ws.cell(row=row, column=1, value="Дата проверки:").font = header_font
+    ws.cell(row=row, column=2, value=check.get('created_at', '-'))
+    row += 1
+
+    ws.cell(row=row, column=1, value="Статус:").font = header_font
+    status = check.get('overall_status', 'green')
+    status_text = {'red': 'ЗАПРЕЩЕНО', 'yellow': 'ТРЕБУЕТ ПРОВЕРКИ', 'green': 'РАЗРЕШЕНО'}.get(status, status)
+    cell = ws.cell(row=row, column=2, value=status_text)
+    cell.fill = status_fills.get(status, status_fills['green'])
+    row += 2
+
+    # Распознанные тексты
+    ws.cell(row=row, column=1, value="РАСПОЗНАННЫЕ ТЕКСТЫ").font = header_font
+    row += 1
+    texts = check.get('recognized_texts', [])
+    if texts:
+        for t in texts:
+            ws.cell(row=row, column=1, value=t.get('text', '-'))
+            ws.cell(row=row, column=2, value=f"{t.get('confidence', 0)}%")
+            row += 1
+    else:
+        ws.cell(row=row, column=1, value="Текст не распознан")
+        row += 1
+    row += 1
+
+    # Факторы риска
+    ws.cell(row=row, column=1, value="ФАКТОРЫ РИСКА").font = header_font
+    row += 1
+    risks = check.get('risk_factors', [])
+    if risks:
+        for r in risks:
+            ws.cell(row=row, column=1, value=r.get('message', '-'))
+            row += 1
+    else:
+        ws.cell(row=row, column=1, value="Не обнаружено")
+        row += 1
+    row += 1
+
+    # Рекомендации
+    ws.cell(row=row, column=1, value="РЕКОМЕНДАЦИИ").font = header_font
+    row += 1
+    recs = check.get('recommendations', [])
+    for r in recs:
+        ws.cell(row=row, column=1, value=r)
+        row += 1
+
+    # Автоширина колонок
+    ws.column_dimensions['A'].width = 40
+    ws.column_dimensions['B'].width = 50
+
+    # Сохранение
+    output_path = OUTPUT_DIR / f"report_image_{check.get('id', 'unknown')}.xlsx"
+    wb.save(str(output_path))
+    return str(output_path)
+
+
+def export_image_to_pdf(check: Dict) -> str:
+    """Экспорт проверки изображения в PDF"""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # Регистрируем шрифт с поддержкой кириллицы
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVu', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+        font_name = 'DejaVu'
+    except:
+        font_name = 'Helvetica'
+
+    output_path = OUTPUT_DIR / f"report_image_{check.get('id', 'unknown')}.pdf"
+    doc = SimpleDocTemplate(str(output_path), pagesize=A4,
+                           rightMargin=2*cm, leftMargin=2*cm,
+                           topMargin=2*cm, bottomMargin=2*cm)
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='RuTitle', fontName=font_name, fontSize=18, spaceAfter=20))
+    styles.add(ParagraphStyle(name='RuHeading', fontName=font_name, fontSize=14, spaceAfter=10, spaceBefore=15))
+    styles.add(ParagraphStyle(name='RuNormal', fontName=font_name, fontSize=11, spaceAfter=5))
+
+    story = []
+
+    # Заголовок
+    story.append(Paragraph("OTCHET O PROVERKE IZOBRAZHENIYA", styles['RuTitle']))
+    story.append(Spacer(1, 0.5*cm))
+
+    # Статус
+    status = check.get('overall_status', 'green')
+    status_text = {'red': 'ZAPRESHCHENO', 'yellow': 'TREBUET PROVERKI', 'green': 'RAZRESHENO'}.get(status, status)
+    status_color = {'red': colors.red, 'yellow': colors.yellow, 'green': colors.green}.get(status, colors.green)
+
+    # Основная информация
+    data = [
+        ['Fayl:', check.get('filename', '-')],
+        ['Data:', check.get('created_at', '-')],
+        ['Status:', status_text],
+    ]
+    t = Table(data, colWidths=[4*cm, 12*cm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, -1), font_name),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('FONTNAME', (0, 0), (0, -1), font_name),
+        ('BACKGROUND', (1, 2), (1, 2), status_color),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.5*cm))
+
+    # Распознанные тексты
+    story.append(Paragraph("Raspoznannye teksty:", styles['RuHeading']))
+    texts = check.get('recognized_texts', [])
+    if texts:
+        for t in texts:
+            story.append(Paragraph(f"• {t.get('text', '-')} ({t.get('confidence', 0)}%)", styles['RuNormal']))
+    else:
+        story.append(Paragraph("Tekst ne raspoznan", styles['RuNormal']))
+
+    # Факторы риска
+    story.append(Paragraph("Faktory riska:", styles['RuHeading']))
+    risks = check.get('risk_factors', [])
+    if risks:
+        for r in risks:
+            story.append(Paragraph(f"• {r.get('message', '-')}", styles['RuNormal']))
+    else:
+        story.append(Paragraph("Ne obnaruzheno", styles['RuNormal']))
+
+    # Рекомендации
+    story.append(Paragraph("Rekomendatsii:", styles['RuHeading']))
+    recs = check.get('recommendations', [])
+    for r in recs:
+        # Убираем эмодзи для PDF
+        r_clean = r.replace('⛔', '[!]').replace('⚠️', '[!]').replace('✅', '[OK]')
+        story.append(Paragraph(f"• {r_clean}", styles['RuNormal']))
+
+    doc.build(story)
+    return str(output_path)
+
+
+def export_name_to_excel(check: Dict) -> str:
+    """Экспорт проверки наименования в Excel"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Отчёт проверки"
+
+    header_font = Font(bold=True, size=14)
+    status_fills = {
+        'red': PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid"),
+        'yellow': PatternFill(start_color="FFE66D", end_color="FFE66D", fill_type="solid"),
+        'green': PatternFill(start_color="6BCB77", end_color="6BCB77", fill_type="solid")
+    }
+
+    row = 1
+
+    ws.cell(row=row, column=1, value="ОТЧЁТ О ПРОВЕРКЕ НАИМЕНОВАНИЯ").font = Font(bold=True, size=16)
+    row += 2
+
+    ws.cell(row=row, column=1, value="Текст запроса:").font = header_font
+    ws.cell(row=row, column=2, value=check.get('query_text', '-'))
+    row += 1
+
+    ws.cell(row=row, column=1, value="Классы МКТУ:").font = header_font
+    ws.cell(row=row, column=2, value=', '.join(map(str, check.get('mktu_classes', []))) or '-')
+    row += 1
+
+    ws.cell(row=row, column=1, value="Дата проверки:").font = header_font
+    ws.cell(row=row, column=2, value=check.get('created_at', '-'))
+    row += 1
+
+    ws.cell(row=row, column=1, value="Статус:").font = header_font
+    status = check.get('overall_status', 'green')
+    status_text = {'red': 'ЗАПРЕЩЕНО', 'yellow': 'ТРЕБУЕТ ПРОВЕРКИ', 'green': 'РАЗРЕШЕНО'}.get(status, status)
+    cell = ws.cell(row=row, column=2, value=status_text)
+    cell.fill = status_fills.get(status, status_fills['green'])
+    row += 2
+
+    # Результаты проверки
+    ws.cell(row=row, column=1, value="РЕЗУЛЬТАТЫ ПРОВЕРКИ").font = header_font
+    row += 1
+    results = check.get('results', [])
+    for r in results:
+        ws.cell(row=row, column=1, value=r.get('resource', '-'))
+        ws.cell(row=row, column=2, value=r.get('notes', '-'))
+        row += 1
+    row += 1
+
+    # Ссылки для проверки
+    ws.cell(row=row, column=1, value="ССЫЛКИ ДЛЯ РУЧНОЙ ПРОВЕРКИ").font = header_font
+    row += 1
+    links = check.get('manual_links', {})
+    for name, url in links.items():
+        ws.cell(row=row, column=1, value=name)
+        ws.cell(row=row, column=2, value=url)
+        row += 1
+
+    ws.column_dimensions['A'].width = 40
+    ws.column_dimensions['B'].width = 60
+
+    output_path = OUTPUT_DIR / f"report_name_{check.get('id', 'unknown')}.xlsx"
+    wb.save(str(output_path))
+    return str(output_path)
+
+
+def export_name_to_pdf(check: Dict) -> str:
+    """Экспорт проверки наименования в PDF"""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVu', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+        font_name = 'DejaVu'
+    except:
+        font_name = 'Helvetica'
+
+    output_path = OUTPUT_DIR / f"report_name_{check.get('id', 'unknown')}.pdf"
+    doc = SimpleDocTemplate(str(output_path), pagesize=A4,
+                           rightMargin=2*cm, leftMargin=2*cm,
+                           topMargin=2*cm, bottomMargin=2*cm)
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='RuTitle', fontName=font_name, fontSize=18, spaceAfter=20))
+    styles.add(ParagraphStyle(name='RuHeading', fontName=font_name, fontSize=14, spaceAfter=10, spaceBefore=15))
+    styles.add(ParagraphStyle(name='RuNormal', fontName=font_name, fontSize=11, spaceAfter=5))
+
+    story = []
+
+    story.append(Paragraph("OTCHET O PROVERKE NAIMENOVANIYA", styles['RuTitle']))
+    story.append(Spacer(1, 0.5*cm))
+
+    status = check.get('overall_status', 'green')
+    status_text = {'red': 'ZAPRESHCHENO', 'yellow': 'TREBUET PROVERKI', 'green': 'RAZRESHENO'}.get(status, status)
+    status_color = {'red': colors.red, 'yellow': colors.yellow, 'green': colors.green}.get(status, colors.green)
+
+    data = [
+        ['Tekst:', check.get('query_text', '-')],
+        ['Klassy MKTU:', ', '.join(map(str, check.get('mktu_classes', []))) or '-'],
+        ['Data:', check.get('created_at', '-')],
+        ['Status:', status_text],
+    ]
+    t = Table(data, colWidths=[4*cm, 12*cm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, -1), font_name),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('BACKGROUND', (1, 3), (1, 3), status_color),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.5*cm))
+
+    story.append(Paragraph("Rezultaty proverki:", styles['RuHeading']))
+    results = check.get('results', [])
+    for r in results:
+        story.append(Paragraph(f"• {r.get('resource', '-')}: {r.get('notes', '-')}", styles['RuNormal']))
+
+    story.append(Paragraph("Ssylki dlya proverki:", styles['RuHeading']))
+    links = check.get('manual_links', {})
+    for name, url in links.items():
+        story.append(Paragraph(f"• {name}: {url}", styles['RuNormal']))
+
+    doc.build(story)
+    return str(output_path)
 
 
 if __name__ == '__main__':

@@ -226,9 +226,12 @@
                 <i class="bi bi-shield-check me-2"></i>
                 Проверка интеллектуальной собственности
             </a>
-            <div class="d-flex align-items-center text-white">
+            <div class="d-flex align-items-center text-white gap-2">
+                <a href="/history" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-clock-history me-1"></i> История
+                </a>
                 <a href="/api/template" class="btn btn-outline-light btn-sm">
-                    <i class="bi bi-download me-1"></i> Скачать шаблон
+                    <i class="bi bi-download me-1"></i> Шаблон
                 </a>
             </div>
         </div>
@@ -238,7 +241,7 @@
         <!-- Легенда статусов -->
         <div class="card mb-4">
             <div class="card-body">
-                <h6 class="mb-3"><i class="bi bi-info-circle me-2"></i>Расшифровка статусов</h6>
+                <h6 class="mb-3"><i class="bi bi-info-circle me-2"></i></h6>
                 <div class="row">
                     <div class="col-md-4">
                         <div class="legend-item">
@@ -275,12 +278,17 @@
         <ul class="nav nav-tabs" id="mainTabs" role="tablist">
             <li class="nav-item" role="presentation">
                 <button class="nav-link active" id="quick-tab" data-bs-toggle="tab" data-bs-target="#quick" type="button">
-                    <i class="bi bi-lightning me-1"></i> Быстрая проверка
+                    <i class="bi bi-search me-1"></i> Проверка наименования (словесного знака)
                 </button>
             </li>
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="batch-tab" data-bs-toggle="tab" data-bs-target="#batch" type="button">
-                    <i class="bi bi-list-check me-1"></i> Пакетная проверка
+                    <i class="bi bi-image me-1"></i> Проверка по изображению
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="batch-multi-tab" data-bs-toggle="tab" data-bs-target="#batchMulti" type="button">
+                    <i class="bi bi-images me-1"></i> Пакетная проверка
                 </button>
             </li>
             <li class="nav-item" role="presentation">
@@ -295,7 +303,7 @@
             <div class="tab-pane fade show active" id="quick" role="tabpanel">
                 <div class="card">
                     <div class="card-header">
-                        <i class="bi bi-search me-2"></i>Быстрая проверка обозначения
+                        <i class="bi bi-search me-2"></i>Проверка товарного знака
                     </div>
                     <div class="card-body">
                         <form id="quickCheckForm" class="quick-check-form">
@@ -304,12 +312,6 @@
                                 <input type="text" class="form-control form-control-lg" id="checkText"
                                        placeholder="Введите название, слоган или текст с товара" required>
                                 <div class="form-text">Введите текст, который планируете использовать на товаре</div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label class="form-label">Артикул товара</label>
-                                <input type="text" class="form-control" id="checkArticle"
-                                       placeholder="SKU или артикул">
                             </div>
 
                             <div class="mb-3">
@@ -323,11 +325,6 @@
                                     {% endfor %}
                                 </div>
                                 <div class="form-text">Выберите классы товаров/услуг для более точной проверки</div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label class="form-label">Изображение (опционально)</label>
-                                <input type="file" class="form-control" id="checkImage" accept="image/*">
                             </div>
 
                             <button type="submit" class="btn btn-primary btn-lg w-100">
@@ -351,33 +348,13 @@
                 </div>
             </div>
 
-            <!-- Пакетная проверка -->
+            <!-- Проверка по изображению -->
             <div class="tab-pane fade" id="batch" role="tabpanel">
                 <div class="row">
-                    <div class="col-md-6 mb-4">
+                    <div class="col-md-8 mx-auto mb-4">
                         <div class="card h-100">
                             <div class="card-header">
-                                <i class="bi bi-file-earmark-excel me-2"></i>Загрузка из файла
-                            </div>
-                            <div class="card-body">
-                                <div class="upload-area" id="excelUploadArea">
-                                    <i class="bi bi-cloud-upload" style="font-size: 48px; color: #ccc;"></i>
-                                    <p class="mt-3 mb-0">Перетащите Excel/CSV файл сюда</p>
-                                    <p class="text-muted">или нажмите для выбора</p>
-                                    <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display: none;">
-                                </div>
-                                <div class="mt-3">
-                                    <a href="/api/template" class="btn btn-outline-secondary btn-sm">
-                                        <i class="bi bi-download me-1"></i>Скачать шаблон
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6 mb-4">
-                        <div class="card h-100">
-                            <div class="card-header">
-                                <i class="bi bi-images me-2"></i>Проверка изображения
+                                <i class="bi bi-image me-2"></i>Загрузите изображение для проверки
                             </div>
                             <div class="card-body">
                                 <div class="upload-area" id="imageUploadArea">
@@ -400,7 +377,7 @@
                                             {% endfor %}
                                         </select>
                                     </div>
-                                    <button class="btn btn-primary btn-sm mt-2 w-100" onclick="checkSingleImage()">
+                                    <button class="btn btn-primary mt-2 w-100" onclick="checkSingleImage()">
                                         <i class="bi bi-search me-1"></i>Проверить изображение
                                     </button>
                                 </div>
@@ -441,8 +418,17 @@
                                 <div id="imageOverallStatus" class="alert mb-3">
                                     <!-- Статус будет добавлен динамически -->
                                 </div>
-                                <div id="imageSummaryStats" class="small text-muted">
+                                <div id="imageSummaryStats" class="small text-muted mb-3">
                                     <!-- Статистика будет добавлена динамически -->
+                                </div>
+                                <!-- Кнопки экспорта -->
+                                <div id="imageExportButtons" class="d-flex gap-2" style="display: none;">
+                                    <button class="btn btn-sm btn-success" onclick="exportImageReport('excel')">
+                                        <i class="bi bi-file-earmark-excel me-1"></i>Excel
+                                    </button>
+                                    <button class="btn btn-sm btn-danger" onclick="exportImageReport('pdf')">
+                                        <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+                                    </button>
                                 </div>
                             </div>
 
@@ -608,6 +594,37 @@
                 </div>
             </div>
 
+            <!-- Пакетная проверка (несколько изображений) -->
+            <div class="tab-pane fade" id="batchMulti" role="tabpanel">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-images me-2"></i>Пакетная проверка нескольких изображений
+                    </div>
+                    <div class="card-body">
+                        <div class="upload-area" id="multiImageUploadArea">
+                            <i class="bi bi-cloud-upload" style="font-size: 48px; color: #ccc;"></i>
+                            <p class="mt-3 mb-0">Перетащите несколько изображений сюда</p>
+                            <p class="text-muted">или нажмите для выбора (до 10 файлов)</p>
+                            <input type="file" id="multiImageFileInput" accept="image/*" multiple style="display: none;">
+                        </div>
+                        <div id="multiImagePreviewArea" class="mt-3 row g-2" style="display: none;">
+                            <!-- Превью изображений будут добавлены динамически -->
+                        </div>
+                        <div id="multiImageActions" class="mt-3" style="display: none;">
+                            <button class="btn btn-primary" onclick="checkMultipleImages()">
+                                <i class="bi bi-search me-1"></i>Проверить все изображения
+                            </button>
+                            <button class="btn btn-outline-secondary ms-2" onclick="clearMultipleImages()">
+                                <i class="bi bi-x-lg me-1"></i>Очистить
+                            </button>
+                        </div>
+                        <div id="multiImageResults" class="mt-4" style="display: none;">
+                            <!-- Результаты пакетной проверки -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Ресурсы для проверки -->
             <div class="tab-pane fade" id="resources" role="tabpanel">
                 <div class="row">
@@ -660,13 +677,13 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let currentSessionId = null;
+        let currentImageCheckId = null;  // ID текущей проверки изображения для экспорта
 
         // Быстрая проверка
         document.getElementById('quickCheckForm').addEventListener('submit', async function(e) {
             e.preventDefault();
 
             const text = document.getElementById('checkText').value;
-            const article = document.getElementById('checkArticle').value;
             const mktuCheckboxes = document.querySelectorAll('input[name="mktu"]:checked');
             const mktuClasses = Array.from(mktuCheckboxes).map(cb => parseInt(cb.value));
 
@@ -680,7 +697,6 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         text: text,
-                        article: article,
                         mktu_classes: mktuClasses
                     })
                 });
@@ -802,65 +818,6 @@
             container.style.display = 'block';
         }
 
-        // Загрузка Excel
-        const excelUploadArea = document.getElementById('excelUploadArea');
-        const excelFileInput = document.getElementById('excelFileInput');
-
-        excelUploadArea.addEventListener('click', () => excelFileInput.click());
-        excelUploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            excelUploadArea.classList.add('dragover');
-        });
-        excelUploadArea.addEventListener('dragleave', () => {
-            excelUploadArea.classList.remove('dragover');
-        });
-        excelUploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            excelUploadArea.classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                uploadExcel(files[0]);
-            }
-        });
-
-        excelFileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                uploadExcel(e.target.files[0]);
-            }
-        });
-
-        async function uploadExcel(file) {
-            const formData = new FormData();
-            formData.append('file', file);
-
-            document.getElementById('batchProgress').style.display = 'block';
-
-            try {
-                const response = await fetch('/api/upload/excel', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-
-                if (data.error) {
-                    alert('Ошибка: ' + data.error);
-                    document.getElementById('batchProgress').style.display = 'none';
-                    return;
-                }
-
-                currentSessionId = data.session_id;
-                alert(`Загружено ${data.total_items} товаров. Нажмите OK для запуска проверки.`);
-
-                // Запускаем проверку
-                await runBatchCheck(data.session_id);
-
-            } catch (error) {
-                alert('Ошибка загрузки: ' + error.message);
-                document.getElementById('batchProgress').style.display = 'none';
-            }
-        }
-
         // Загрузка изображений
         const imageUploadArea = document.getElementById('imageUploadArea');
         const imageFileInput = document.getElementById('imageFileInput');
@@ -944,6 +901,13 @@
         function displayImageCheckResults(data) {
             const resultsDiv = document.getElementById('imageCheckResults');
             resultsDiv.style.display = 'block';
+
+            // Сохраняем ID проверки для экспорта
+            currentImageCheckId = data.check_id || null;
+            const exportBtns = document.getElementById('imageExportButtons');
+            if (currentImageCheckId && exportBtns) {
+                exportBtns.style.display = 'flex';
+            }
 
             // Изображение
             document.getElementById('resultImagePreview').src = document.getElementById('imagePreview').src;
@@ -1036,20 +1000,63 @@
                 `;
             }
 
-            // Ссылки для поиска изображений
+            // Результаты автоматического поиска изображений
             const searchLinksContent = document.getElementById('searchLinksContent');
+            let searchHtml = '';
+
+            // Сначала показываем автоматические результаты
+            if (data.image_search_results && data.image_search_results.length > 0) {
+                searchHtml += '<div class="mb-3"><strong>🔍 Автоматический поиск:</strong></div>';
+                searchHtml += '<div class="list-group mb-3">';
+                data.image_search_results.forEach(sr => {
+                    const statusClass = sr.status === 'red' ? 'list-group-item-danger' :
+                                       sr.status === 'yellow' ? 'list-group-item-warning' :
+                                       'list-group-item-success';
+                    const statusIcon = sr.status === 'red' ? '🔴' :
+                                      sr.status === 'yellow' ? '🟡' : '🟢';
+
+                    searchHtml += `
+                        <div class="list-group-item ${statusClass}">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <strong>${statusIcon} ${sr.resource}</strong>
+                                    <p class="mb-1 small">${sr.notes}</p>
+                                    ${sr.total_results > 0 ? `<small class="text-muted">Найдено: ${sr.total_results} совпадений</small>` : ''}
+                                </div>
+                                ${sr.url ? `<a href="${sr.url}" target="_blank" class="btn btn-sm btn-outline-secondary">Открыть</a>` : ''}
+                            </div>
+                            ${sr.similar_images && sr.similar_images.length > 0 ? `
+                                <div class="mt-2">
+                                    <small class="text-muted">Похожие изображения:</small>
+                                    <ul class="small mb-0">
+                                        ${sr.similar_images.slice(0, 3).map(img => `
+                                            <li><a href="${img.link}" target="_blank">${img.title || img.source || 'Ссылка'}</a></li>
+                                        `).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                });
+                searchHtml += '</div>';
+                searchHtml += '<hr>';
+            }
+
+            // Затем ссылки для ручной проверки
+            searchHtml += '<p class="text-muted mb-2">Выполните обратный поиск изображения:</p>';
+            searchHtml += '<div class="d-flex flex-wrap gap-2">';
             if (data.image_search_links) {
-                let linksHtml = '';
                 Object.entries(data.image_search_links).forEach(([key, info]) => {
-                    linksHtml += `
+                    searchHtml += `
                         <a href="${info.url}" target="_blank" class="btn btn-outline-primary btn-sm"
                            title="${info.instruction}">
                             <i class="bi bi-box-arrow-up-right me-1"></i>${info.name}
                         </a>
                     `;
                 });
-                searchLinksContent.innerHTML = linksHtml;
             }
+            searchHtml += '</div>';
+            searchLinksContent.innerHTML = searchHtml;
 
             // Ссылки для проверки ТЗ
             const tmLinksContent = document.getElementById('tmLinksContent');
@@ -1096,6 +1103,16 @@
 
         function closeImageResults() {
             document.getElementById('imageCheckResults').style.display = 'none';
+            currentImageCheckId = null;
+        }
+
+        // Экспорт отчёта по изображению
+        function exportImageReport(format) {
+            if (!currentImageCheckId) {
+                alert('Отчёт не доступен. Выполните проверку заново.');
+                return;
+            }
+            window.location.href = `/api/export/image/${currentImageCheckId}/${format}`;
         }
 
         // Массовая загрузка изображений (старая функция для совместимости)
@@ -1211,6 +1228,159 @@
             }
 
             window.location.href = `/api/export/${currentSessionId}/${format}`;
+        }
+
+        // Пакетная загрузка нескольких изображений
+        const multiImageUploadArea = document.getElementById('multiImageUploadArea');
+        const multiImageFileInput = document.getElementById('multiImageFileInput');
+        let multiImageFiles = [];
+
+        if (multiImageUploadArea && multiImageFileInput) {
+            multiImageUploadArea.addEventListener('click', () => multiImageFileInput.click());
+            multiImageUploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                multiImageUploadArea.classList.add('dragover');
+            });
+            multiImageUploadArea.addEventListener('dragleave', () => {
+                multiImageUploadArea.classList.remove('dragover');
+            });
+            multiImageUploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                multiImageUploadArea.classList.remove('dragover');
+                if (e.dataTransfer.files.length > 0) {
+                    addMultipleImages(Array.from(e.dataTransfer.files));
+                }
+            });
+
+            multiImageFileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    addMultipleImages(Array.from(e.target.files));
+                }
+            });
+        }
+
+        function addMultipleImages(files) {
+            const imageFiles = files.filter(f => f.type.startsWith('image/')).slice(0, 10);
+            multiImageFiles = imageFiles;
+
+            const previewArea = document.getElementById('multiImagePreviewArea');
+            const actionsArea = document.getElementById('multiImageActions');
+
+            if (imageFiles.length > 0) {
+                previewArea.style.display = 'flex';
+                actionsArea.style.display = 'block';
+                previewArea.innerHTML = '';
+
+                imageFiles.forEach((file, idx) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const col = document.createElement('div');
+                        col.className = 'col-md-2 col-sm-3 col-4';
+                        col.innerHTML = `
+                            <div class="card h-100">
+                                <img src="${e.target.result}" class="card-img-top" style="height: 80px; object-fit: cover;">
+                                <div class="card-body p-1 text-center">
+                                    <small class="text-muted">${file.name.slice(0, 10)}...</small>
+                                </div>
+                            </div>
+                        `;
+                        previewArea.appendChild(col);
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+        }
+
+        function clearMultipleImages() {
+            multiImageFiles = [];
+            document.getElementById('multiImagePreviewArea').style.display = 'none';
+            document.getElementById('multiImageActions').style.display = 'none';
+            document.getElementById('multiImageResults').style.display = 'none';
+        }
+
+        async function checkMultipleImages() {
+            if (multiImageFiles.length === 0) {
+                alert('Сначала выберите изображения');
+                return;
+            }
+
+            const resultsDiv = document.getElementById('multiImageResults');
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div class="alert alert-info"><div class="spinner-border spinner-border-sm me-2"></div>Проверка изображений... 0/' + multiImageFiles.length + '</div>';
+
+            let results = [];
+            for (let i = 0; i < multiImageFiles.length; i++) {
+                const file = multiImageFiles[i];
+                resultsDiv.innerHTML = `<div class="alert alert-info"><div class="spinner-border spinner-border-sm me-2"></div>Проверка изображений... ${i + 1}/${multiImageFiles.length}</div>`;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch('/api/check/image', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+                    results.push({
+                        filename: file.name,
+                        ...data
+                    });
+                } catch (error) {
+                    results.push({
+                        filename: file.name,
+                        error: error.message,
+                        overall_status: 'yellow'
+                    });
+                }
+            }
+
+            // Отображаем результаты
+            displayMultiImageResults(results);
+        }
+
+        function displayMultiImageResults(results) {
+            const resultsDiv = document.getElementById('multiImageResults');
+
+            let html = '<h5>Результаты проверки</h5>';
+            html += '<div class="table-responsive"><table class="table table-hover">';
+            html += '<thead><tr><th>Статус</th><th>Файл</th><th>Тексты</th><th>Проблемы</th></tr></thead>';
+            html += '<tbody>';
+
+            results.forEach(r => {
+                const statusClass = r.overall_status === 'red' ? 'status-red' :
+                                   r.overall_status === 'yellow' ? 'status-yellow' : 'status-green';
+                const statusLabel = r.overall_status === 'red' ? 'ЗАПРЕЩЕНО' :
+                                   r.overall_status === 'yellow' ? 'ВНИМАНИЕ' : 'РАЗРЕШЕНО';
+
+                const texts = r.recognized_texts ? r.recognized_texts.map(t => t.text).join(', ') : '-';
+                const problems = r.risk_factors ? r.risk_factors.length : 0;
+
+                html += `<tr>
+                    <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+                    <td>${r.filename}</td>
+                    <td>${texts.slice(0, 50)}${texts.length > 50 ? '...' : ''}</td>
+                    <td>${problems > 0 ? '<span class="badge bg-danger">' + problems + '</span>' : '<span class="badge bg-success">0</span>'}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+
+            // Статистика
+            const redCount = results.filter(r => r.overall_status === 'red').length;
+            const yellowCount = results.filter(r => r.overall_status === 'yellow').length;
+            const greenCount = results.filter(r => r.overall_status === 'green').length;
+
+            html = `
+                <div class="row mb-3">
+                    <div class="col-md-4"><div class="alert alert-danger mb-0 text-center"><strong>${redCount}</strong> запрещено</div></div>
+                    <div class="col-md-4"><div class="alert alert-warning mb-0 text-center"><strong>${yellowCount}</strong> требует проверки</div></div>
+                    <div class="col-md-4"><div class="alert alert-success mb-0 text-center"><strong>${greenCount}</strong> разрешено</div></div>
+                </div>
+            ` + html;
+
+            resultsDiv.innerHTML = html;
         }
     </script>
 </body>

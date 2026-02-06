@@ -151,35 +151,89 @@ class OCRProcessor:
             print("[!] ВНИМАНИЕ: OCR не доступен! Установите easyocr или tesseract.")
 
     def extract_text_easyocr(self, image_path: str) -> List[TextOnImage]:
-        """Извлечение текста с помощью EasyOCR"""
+        """
+        Извлечение текста с помощью EasyOCR.
+        Улучшено для многострочного текста и текста под углом.
+        """
         if not self.reader:
+            print("[OCR] EasyOCR reader не инициализирован!")
             return []
 
         results = []
         found_texts = set()
+        all_raw_detections = []  # Для диагностики
 
         try:
+            print(f"[OCR] Обработка изображения: {image_path}")
+
             # Пробуем на оригинале и предобработанных вариантах
             variants = self._preprocess_image(image_path)
+            print(f"[OCR] Создано {len(variants)} вариантов изображения")
 
-            for img_variant in variants[:4]:  # Максимум 4 варианта
+            for idx, img_variant in enumerate(variants[:5]):  # Ограничиваем 5 вариантами для скорости
                 try:
                     # EasyOCR может принимать PIL Image или путь
                     import numpy as np
+
+                    # Конвертируем в RGB если нужно
+                    if img_variant.mode != 'RGB':
+                        img_variant = img_variant.convert('RGB')
+
                     img_array = np.array(img_variant)
-                    detections = self.reader.readtext(img_array)
+                    print(f"[OCR] Вариант {idx}: размер {img_array.shape}, dtype={img_array.dtype}")
+
+                    # Используем разные параметры для разных вариантов
+                    # Низкий порог текста для обнаружения стилизованных шрифтов
+                    detections = self.reader.readtext(
+                        img_array,
+                        paragraph=False,
+                        width_ths=0.7,  # Увеличено для объединения слов
+                        height_ths=0.7,
+                        ycenter_ths=0.5,
+                        add_margin=0.15,  # Увеличен отступ
+                        text_threshold=0.3,  # Снижен порог текста (по умолчанию 0.7)
+                        low_text=0.3,  # Снижен порог для низкого текста
+                        link_threshold=0.3,  # Снижен порог связи
+                        mag_ratio=1.5  # Увеличение масштаба для мелкого текста
+                    )
+
+                    print(f"[OCR] Вариант {idx}: найдено {len(detections)} детекций")
 
                     for detection in detections:
                         bbox, text, confidence = detection
                         text_clean = text.strip()
                         text_lower = text_clean.lower()
 
+                        # Сохраняем для диагностики
+                        all_raw_detections.append({
+                            'variant': idx,
+                            'text': text_clean,
+                            'confidence': confidence,
+                            'accepted': False
+                        })
+
+                        print(f"[OCR]   - '{text_clean}' (conf={confidence:.2f})")
+
                         # Дедупликация
                         if text_lower in found_texts:
                             continue
 
-                        if confidence > 0.15 and len(text_clean) > 1:  # Снижен порог
+                        # БОЛЕЕ МЯГКИЕ критерии фильтрации для логотипов
+                        # Снижен порог уверенности до 20% для стилизованных шрифтов
+                        is_valid_text = (
+                            confidence > 0.20 and  # Очень низкий порог для логотипов
+                            len(text_clean) >= 2 and  # Минимум 2 символа
+                            any(c.isalpha() for c in text_clean)  # Должны быть буквы
+                        )
+
+                        # Дополнительная проверка на мусор только если текст прошёл базовую
+                        if is_valid_text and len(text_clean) > 3:
+                            is_valid_text = not self._is_garbage_text(text_clean)
+
+                        if is_valid_text:
                             found_texts.add(text_lower)
+                            all_raw_detections[-1]['accepted'] = True
+
                             # bbox = [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
                             x1, y1 = bbox[0]
                             x2, y2 = bbox[2]
@@ -195,12 +249,24 @@ class OCRProcessor:
                                 },
                                 language=self._detect_language(text_clean)
                             ))
+                            print(f"[OCR]   ✓ Принято: '{text_clean}'")
+                        else:
+                            print(f"[OCR]   ✗ Отклонено: '{text_clean}' (conf={confidence:.2f}, len={len(text_clean)})")
+
                 except Exception as e:
-                    print(f"Ошибка EasyOCR для варианта: {e}")
+                    print(f"[OCR] Ошибка для варианта {idx}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
 
+            # Диагностика
+            print(f"[OCR] Всего сырых детекций: {len(all_raw_detections)}")
+            print(f"[OCR] Принято текстов: {len(results)}")
+
         except Exception as e:
-            print(f"Ошибка EasyOCR: {e}")
+            print(f"[OCR] Критическая ошибка EasyOCR: {e}")
+            import traceback
+            traceback.print_exc()
 
         # Сортируем по уверенности
         results.sort(key=lambda x: x.confidence, reverse=True)
@@ -209,49 +275,74 @@ class OCRProcessor:
     def _preprocess_image(self, image_path: str) -> List[Image.Image]:
         """
         Предобработка изображения для улучшения OCR
-        Возвращает список вариантов изображения для распознавания
+        Возвращает список ОПТИМИЗИРОВАННЫХ вариантов изображения для распознавания
+        Сокращено до 6 наиболее эффективных вариантов
         """
         img = Image.open(image_path)
-        variants = [img]  # Оригинал
+        variants = []
 
         try:
+            from PIL import ImageEnhance, ImageFilter, ImageOps
+            import numpy as np
+
             # Конвертируем в RGB если нужно
             if img.mode != 'RGB':
-                img = img.convert('RGB')
+                img_rgb = img.convert('RGB')
+            else:
+                img_rgb = img
 
-            # Вариант 1: Оттенки серого
-            gray = img.convert('L')
-            variants.append(gray)
+            width, height = img_rgb.size
+            print(f"[Preprocess] Оригинал: {width}x{height}")
 
-            # Вариант 2: Увеличение контраста
-            from PIL import ImageEnhance, ImageFilter
-            enhancer = ImageEnhance.Contrast(img)
-            high_contrast = enhancer.enhance(2.0)
+            # === ОПТИМИЗИРОВАННЫЙ НАБОР (6 вариантов) ===
+
+            # 1. Увеличенный оригинал (критично для мелкого текста!)
+            scale = max(2, 1500 // max(width, height))
+            large = img_rgb.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
+            variants.append(large)
+
+            # 2. Увеличенный + контраст (основной вариант)
+            large_contrast = ImageEnhance.Contrast(large).enhance(2.0)
+            variants.append(large_contrast)
+
+            # 3. Оригинал (для качественных изображений)
+            variants.append(img_rgb)
+
+            # 4. Инверсия увеличенная (для светлого текста на тёмном фоне)
+            inverted_large = ImageOps.invert(large)
+            variants.append(inverted_large)
+
+            # 5. Выделение цветного текста по насыщенности
+            try:
+                img_np = np.array(img_rgb)
+                r_ch, g_ch, b_ch = img_np[:,:,0], img_np[:,:,1], img_np[:,:,2]
+
+                max_rgb = np.maximum(np.maximum(r_ch, g_ch), b_ch)
+                min_rgb = np.minimum(np.minimum(r_ch, g_ch), b_ch)
+                saturation = np.where(max_rgb == 0, 0, (max_rgb - min_rgb) / max_rgb * 255).astype(np.uint8)
+
+                # Маска цветного текста
+                color_mask = saturation > 35
+                result = np.where(color_mask, 0, 255).astype(np.uint8)
+                color_text_img = Image.fromarray(result, mode='L')
+                ct_large = color_text_img.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
+                variants.append(ct_large.convert('RGB'))
+            except:
+                # Fallback: серое увеличенное
+                gray_large = img_rgb.convert('L').resize((width * scale, height * scale), Image.Resampling.LANCZOS)
+                variants.append(gray_large.convert('RGB'))
+
+            # 6. Высокий контраст оригинала
+            high_contrast = ImageEnhance.Contrast(img_rgb).enhance(2.5)
             variants.append(high_contrast)
 
-            # Вариант 3: Инверсия (для светлого текста на тёмном фоне)
-            from PIL import ImageOps
-            inverted = ImageOps.invert(img.convert('RGB'))
-            variants.append(inverted)
-
-            # Вариант 4: Бинаризация серого
-            threshold = 128
-            binary = gray.point(lambda x: 255 if x > threshold else 0, '1')
-            variants.append(binary.convert('L'))
-
-            # Вариант 5: Резкость
-            sharp = img.filter(ImageFilter.SHARPEN)
-            variants.append(sharp)
-
-            # Вариант 6: Увеличение размера (для мелкого текста)
-            width, height = img.size
-            if width < 1000:
-                scale = 2
-                resized = img.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
-                variants.append(resized)
+            print(f"[Preprocess] Создано {len(variants)} оптимизированных вариантов")
 
         except Exception as e:
-            print(f"Ошибка предобработки изображения: {e}")
+            print(f"[Preprocess] Ошибка предобработки: {e}")
+            # Возвращаем хотя бы оригинал
+            if not variants:
+                variants = [img]
 
         return variants
 
@@ -288,8 +379,15 @@ class OCRProcessor:
                             text = data['text'][i].strip()
                             conf = float(data['conf'][i])
 
-                            # Фильтр: текст > 2 символов, уверенность > 20%
-                            if text and len(text) > 2 and conf > 20:
+                            # Фильтр: текст > 2 символов, уверенность > 40%, должны быть буквы
+                            is_valid = (
+                                text and
+                                len(text) > 2 and
+                                conf > 40 and  # Повышен порог
+                                any(c.isalpha() for c in text) and  # Должны быть буквы
+                                not text.replace(' ', '').isdigit()  # Не только цифры
+                            )
+                            if is_valid:
                                 # Дедупликация
                                 text_lower = text.lower()
                                 if text_lower not in found_texts:
@@ -355,16 +453,87 @@ class OCRProcessor:
         return results
 
     def extract_text(self, image_path: str) -> List[TextOnImage]:
-        """Извлечение текста (использует доступный OCR движок)"""
-        # Пробуем EasyOCR (обычно лучше для разных шрифтов)
-        results = self.extract_text_easyocr(image_path)
+        """Извлечение текста (использует все доступные OCR движки и комбинирует результаты)"""
+        all_results = []
+        found_texts = set()
 
-        # Если EasyOCR не работает, пробуем Tesseract
-        if not results:
-            results = self.extract_text_tesseract(image_path)
+        # Пробуем EasyOCR (обычно лучше для разных шрифтов)
+        easyocr_results = self.extract_text_easyocr(image_path)
+        for r in easyocr_results:
+            text_lower = r.text.lower()
+            if text_lower not in found_texts:
+                found_texts.add(text_lower)
+                all_results.append(r)
+        print(f"[OCR] EasyOCR: {len(easyocr_results)} текстов")
+
+        # Также пробуем Tesseract для дополнительного покрытия
+        tesseract_results = self.extract_text_tesseract(image_path)
+        for r in tesseract_results:
+            text_lower = r.text.lower()
+            if text_lower not in found_texts:
+                found_texts.add(text_lower)
+                all_results.append(r)
+        print(f"[OCR] Tesseract: {len(tesseract_results)} текстов")
 
         # Объединяем близко расположенный текст
-        return self._merge_nearby_text(results)
+        merged = self._merge_nearby_text(all_results)
+        print(f"[OCR] После объединения: {len(merged)} текстов")
+
+        return merged
+
+    def _is_garbage_text(self, text: str) -> bool:
+        """
+        Проверка, является ли текст мусорным (ложное распознавание)
+        """
+        text = text.strip()
+
+        # Слишком короткий текст (менее 3 символов)
+        if len(text) < 3:
+            return True
+
+        # Только знаки препинания и специальные символы
+        if not any(c.isalnum() for c in text):
+            return True
+
+        # Случайные комбинации (нет гласных или слишком много согласных подряд)
+        vowels = set('аеёиоуыэюяaeiou')
+        consonants = set('бвгджзйклмнпрстфхцчшщbcdfghjklmnpqrstvwxyz')
+
+        text_lower = text.lower()
+        vowel_count = sum(1 for c in text_lower if c in vowels)
+        consonant_count = sum(1 for c in text_lower if c in consonants)
+        alpha_count = vowel_count + consonant_count
+
+        # Если в тексте нет гласных (кроме аббревиатур)
+        if alpha_count > 3 and vowel_count == 0:
+            return True
+
+        # Слишком много согласных подряд (5+)
+        consecutive_consonants = 0
+        max_consecutive = 0
+        for c in text_lower:
+            if c in consonants:
+                consecutive_consonants += 1
+                max_consecutive = max(max_consecutive, consecutive_consonants)
+            else:
+                consecutive_consonants = 0
+        if max_consecutive >= 5:
+            return True
+
+        # Паттерны мусора от OCR
+        garbage_patterns = [
+            r'^[^a-zA-Zа-яА-ЯёЁ]*$',  # Нет букв
+            r'^[a-z]{1,2}$',  # Одна-две маленькие буквы
+            r'^[A-Z][a-z]?\??$',  # Одна большая + опционально маленькая + вопрос
+            r'^[\?\!\.]+$',  # Только знаки препинания
+        ]
+
+        import re
+        for pattern in garbage_patterns:
+            if re.match(pattern, text):
+                return True
+
+        return False
 
     def _detect_language(self, text: str) -> str:
         """Определение языка текста"""
@@ -378,50 +547,131 @@ class OCRProcessor:
         return "unknown"
 
     def _merge_nearby_text(self, texts: List[TextOnImage],
-                           distance_threshold: int = 20) -> List[TextOnImage]:
-        """Объединение близко расположенного текста"""
+                           distance_threshold: int = 50) -> List[TextOnImage]:
+        """
+        Улучшенное объединение близко расположенного текста.
+        Поддерживает многострочный текст (вертикальное и горизонтальное объединение).
+        """
         if len(texts) <= 1:
             return texts
 
         # Сортируем по позиции (сверху вниз, слева направо)
         texts = sorted(texts, key=lambda t: (t.position.get('y', 0), t.position.get('x', 0)))
 
-        merged = []
-        current = None
+        # Шаг 1: Объединяем текст на одной строке (горизонтально)
+        horizontal_merged = []
+        current_line = None
 
         for text in texts:
-            if current is None:
-                current = text
+            if current_line is None:
+                current_line = text
             else:
                 # Проверяем, находятся ли тексты на одной линии
-                y_diff = abs(text.position.get('y', 0) - current.position.get('y', 0))
-                x_gap = text.position.get('x', 0) - (
-                    current.position.get('x', 0) + current.position.get('width', 0)
-                )
+                current_y = current_line.position.get('y', 0)
+                current_height = current_line.position.get('height', 20)
+                text_y = text.position.get('y', 0)
+                text_height = text.position.get('height', 20)
 
-                if y_diff < distance_threshold and x_gap < distance_threshold * 3:
-                    # Объединяем
-                    current = TextOnImage(
-                        text=f"{current.text} {text.text}",
-                        confidence=min(current.confidence, text.confidence),
+                # Тексты на одной линии, если их центры по Y близки
+                current_center_y = current_y + current_height / 2
+                text_center_y = text_y + text_height / 2
+                y_diff = abs(text_center_y - current_center_y)
+
+                # Горизонтальный промежуток между текстами
+                current_right = current_line.position.get('x', 0) + current_line.position.get('width', 0)
+                text_left = text.position.get('x', 0)
+                x_gap = text_left - current_right
+
+                # Объединяем если на одной строке и близко друг к другу
+                max_height = max(current_height, text_height)
+                if y_diff < max_height * 0.7 and x_gap < distance_threshold * 2:
+                    # Объединяем на одной строке
+                    current_line = TextOnImage(
+                        text=f"{current_line.text} {text.text}",
+                        confidence=min(current_line.confidence, text.confidence),
                         position={
-                            "x": current.position.get('x', 0),
-                            "y": min(current.position.get('y', 0), text.position.get('y', 0)),
+                            "x": current_line.position.get('x', 0),
+                            "y": min(current_y, text_y),
                             "width": (text.position.get('x', 0) + text.position.get('width', 0) -
-                                      current.position.get('x', 0)),
-                            "height": max(current.position.get('height', 0),
-                                          text.position.get('height', 0))
+                                      current_line.position.get('x', 0)),
+                            "height": max(current_height, text_height)
                         },
-                        language=current.language
+                        language=current_line.language
                     )
                 else:
-                    merged.append(current)
-                    current = text
+                    horizontal_merged.append(current_line)
+                    current_line = text
 
-        if current:
-            merged.append(current)
+        if current_line:
+            horizontal_merged.append(current_line)
 
-        return merged
+        # Шаг 2: Объединяем строки вертикально (многострочный текст)
+        if len(horizontal_merged) <= 1:
+            return horizontal_merged
+
+        # Сортируем по Y (сверху вниз)
+        horizontal_merged = sorted(horizontal_merged, key=lambda t: t.position.get('y', 0))
+
+        vertical_merged = []
+        current_block = None
+
+        for text in horizontal_merged:
+            if current_block is None:
+                current_block = text
+            else:
+                # Проверяем, можно ли объединить вертикально
+                current_bottom = current_block.position.get('y', 0) + current_block.position.get('height', 0)
+                text_top = text.position.get('y', 0)
+                y_gap = text_top - current_bottom
+
+                # Проверяем горизонтальное выравнивание
+                current_x = current_block.position.get('x', 0)
+                current_width = current_block.position.get('width', 100)
+                text_x = text.position.get('x', 0)
+                text_width = text.position.get('width', 100)
+
+                # Тексты выровнены если их X координаты пересекаются
+                x_overlap = (text_x < current_x + current_width) and (text_x + text_width > current_x)
+
+                # Объединяем вертикально если близко и выровнены
+                line_height = current_block.position.get('height', 20)
+                if y_gap < line_height * 1.5 and x_overlap:
+                    # Объединяем вертикально (многострочный текст)
+                    current_block = TextOnImage(
+                        text=f"{current_block.text}\n{text.text}",
+                        confidence=min(current_block.confidence, text.confidence),
+                        position={
+                            "x": min(current_x, text_x),
+                            "y": current_block.position.get('y', 0),
+                            "width": max(current_x + current_width, text_x + text_width) - min(current_x, text_x),
+                            "height": (text.position.get('y', 0) + text.position.get('height', 0) -
+                                      current_block.position.get('y', 0))
+                        },
+                        language=current_block.language
+                    )
+                else:
+                    vertical_merged.append(current_block)
+                    current_block = text
+
+        if current_block:
+            vertical_merged.append(current_block)
+
+        # Шаг 3: Также добавляем объединённый текст целиком (для брендов из нескольких слов)
+        if len(vertical_merged) > 1:
+            all_text = " ".join(t.text.replace('\n', ' ') for t in vertical_merged)
+            if len(all_text) > 3:
+                # Вычисляем среднюю уверенность
+                avg_confidence = sum(t.confidence for t in vertical_merged) / len(vertical_merged)
+                combined = TextOnImage(
+                    text=all_text,
+                    confidence=avg_confidence * 0.9,  # Немного снижаем для объединённого
+                    position=vertical_merged[0].position,
+                    language=vertical_merged[0].language
+                )
+                # Добавляем в конец списка
+                vertical_merged.append(combined)
+
+        return vertical_merged
 
 
 class ReverseImageSearcher:
@@ -603,11 +853,29 @@ class CopyrightAnalyzer:
 
     # Известные бренды и персонажи для проверки
     KNOWN_BRANDS = [
-        "Nike", "Adidas", "Apple", "Samsung", "Google", "Microsoft",
-        "Disney", "Marvel", "DC Comics", "Warner Bros", "Sony",
-        "Coca-Cola", "Pepsi", "McDonald's", "Starbucks", "Amazon",
+        # Спортивные бренды
+        "Nike", "Adidas", "Puma", "Reebok", "New Balance", "Fila",
+        "Champion", "Under Armour", "Converse", "Vans", "Asics",
+        "Jordan", "Umbro", "Kappa", "Ellesse", "Lacoste",
+        # Техника
+        "Apple", "Samsung", "Google", "Microsoft", "Sony", "LG",
+        "Huawei", "Xiaomi", "Intel", "AMD", "Nvidia",
+        # Медиа
+        "Disney", "Marvel", "DC Comics", "Warner Bros", "Pixar",
+        "DreamWorks", "Netflix", "HBO", "Nickelodeon",
+        # Напитки и еда
+        "Coca-Cola", "Pepsi", "McDonald's", "Starbucks", "KFC",
+        "Burger King", "Subway", "Pizza Hut", "Red Bull",
+        # Люкс
         "Louis Vuitton", "Gucci", "Chanel", "Prada", "Hermès",
-        "Ferrari", "Lamborghini", "BMW", "Mercedes", "Audi"
+        "Dior", "Versace", "Balenciaga", "Burberry", "Fendi",
+        "Cartier", "Rolex", "Tiffany",
+        # Авто
+        "Ferrari", "Lamborghini", "BMW", "Mercedes", "Audi",
+        "Porsche", "Maserati", "Tesla", "Bentley",
+        # Retail
+        "Amazon", "Ikea", "Zara", "H&M", "Gap", "Uniqlo",
+        "Supreme", "Off-White", "Bape", "Thrasher",
     ]
 
     KNOWN_CHARACTERS = [
@@ -617,7 +885,20 @@ class CopyrightAnalyzer:
         "Hello Kitty", "Pikachu", "Покемон", "Pokemon",
         "Shrek", "Frozen", "Elsa", "Эльза", "Minions", "Миньоны",
         "Peppa Pig", "Свинка Пеппа", "Маша и Медведь", "Фиксики",
-        "Смешарики", "Лунтик", "Три кота"
+        "Смешарики", "Лунтик", "Три кота",
+        # Дополнительные персонажи
+        "Teletubbies", "Телепузики", "Tinky Winky", "Dipsy", "Laa-Laa", "Po",
+        "SpongeBob", "Губка Боб", "Patrick Star", "Патрик",
+        "Paw Patrol", "Щенячий патруль",
+        "Dora", "Даша Следопыт", "Dora Explorer",
+        "Barbie", "Барби", "Ken",
+        "Thomas", "Паровозик Томас", "Thomas Train",
+        "Sonic", "Соник", "Mario", "Марио", "Luigi",
+        "Winnie", "Винни Пух", "Winnie the Pooh", "Pooh",
+        "Simpsons", "Симпсоны", "Homer", "Bart", "Lisa",
+        "Tom and Jerry", "Том и Джерри",
+        "Looney Tunes", "Bugs Bunny", "Багз Банни",
+        "Scooby", "Скуби Ду", "Scooby-Doo"
     ]
 
     def __init__(self):
@@ -665,13 +946,31 @@ class CopyrightAnalyzer:
         return result
 
     def _check_known_items(self, text: str, items: List[str]) -> List[str]:
-        """Проверка текста на наличие известных элементов"""
+        """Проверка текста на наличие известных элементов с нечётким поиском"""
         found = []
         text_lower = text.lower()
 
+        # Точный поиск
         for item in items:
             if item.lower() in text_lower:
                 found.append(item)
+
+        # Нечёткий поиск (для ошибок OCR)
+        if not found and len(text_lower) >= 4:
+            from difflib import SequenceMatcher
+
+            words = text_lower.replace('\n', ' ').split()
+            for word in words:
+                if len(word) < 3:
+                    continue
+                for item in items:
+                    item_lower = item.lower()
+                    # Проверяем похожесть
+                    ratio = SequenceMatcher(None, word, item_lower).ratio()
+                    if ratio > 0.7:  # 70% похожести
+                        print(f"[Copyright] Нечёткое совпадение: '{word}' ~ '{item}' ({ratio:.2f})")
+                        found.append(f"{item} (похоже на '{word}')")
+                        break
 
         return found
 
