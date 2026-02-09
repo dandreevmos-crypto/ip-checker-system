@@ -240,14 +240,9 @@
                     <!-- Контент будет загружен динамически -->
                 </div>
                 <div class="modal-footer">
-                    <div class="btn-group">
-                        <button class="btn btn-success" id="exportExcelBtn">
-                            <i class="bi bi-file-earmark-excel me-1"></i>Excel
-                        </button>
-                        <button class="btn btn-danger" id="exportPdfBtn">
-                            <i class="bi bi-file-earmark-pdf me-1"></i>PDF
-                        </button>
-                    </div>
+                    <button class="btn btn-success" id="exportExcelBtn">
+                        <i class="bi bi-file-earmark-excel me-1"></i>Экспорт в Excel
+                    </button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
                 </div>
             </div>
@@ -318,13 +313,14 @@
                         ? `МКТУ: ${check.mktu_classes.join(', ')}`
                         : '';
 
+                    const queryText = check.query_text || 'Без названия';
                     html += `
                         <div class="history-item status-${check.overall_status}"
                              onclick="showNameDetail(${check.id})" style="cursor: pointer;">
                             <div class="d-flex justify-content-between align-items-start">
                                 <div>
                                     <div class="time">${date}</div>
-                                    <div class="query">${check.query_text}</div>
+                                    <div class="query">${queryText}</div>
                                     <div class="details">${mktu}</div>
                                 </div>
                                 <div class="d-flex align-items-center gap-2">
@@ -617,16 +613,10 @@
             }
         }
 
-        // Экспорт
+        // Экспорт в Excel
         document.getElementById('exportExcelBtn').addEventListener('click', () => {
             if (currentCheckType && currentCheckId) {
                 window.location.href = `/api/export/${currentCheckType}/${currentCheckId}/excel`;
-            }
-        });
-
-        document.getElementById('exportPdfBtn').addEventListener('click', () => {
-            if (currentCheckType && currentCheckId) {
-                window.location.href = `/api/export/${currentCheckType}/${currentCheckId}/pdf`;
             }
         });
 
