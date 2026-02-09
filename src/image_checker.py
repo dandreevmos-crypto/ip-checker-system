@@ -161,18 +161,13 @@ class OCRProcessor:
 
         results = []
         found_texts = set()
-        all_raw_detections = []  # Для диагностики
 
         try:
-            print(f"[OCR] Обработка изображения: {image_path}")
-
             # Пробуем на оригинале и предобработанных вариантах
             variants = self._preprocess_image(image_path)
-            print(f"[OCR] Создано {len(variants)} вариантов изображения")
 
-            for idx, img_variant in enumerate(variants[:5]):  # Ограничиваем 5 вариантами для скорости
+            for idx, img_variant in enumerate(variants[:2]):  # Только 2 варианта для скорости
                 try:
-                    # EasyOCR может принимать PIL Image или путь
                     import numpy as np
 
                     # Конвертируем в RGB если нужно
@@ -180,61 +175,36 @@ class OCRProcessor:
                         img_variant = img_variant.convert('RGB')
 
                     img_array = np.array(img_variant)
-                    print(f"[OCR] Вариант {idx}: размер {img_array.shape}, dtype={img_array.dtype}")
 
-                    # Используем разные параметры для разных вариантов
-                    # Низкий порог текста для обнаружения стилизованных шрифтов
+                    # Быстрые параметры OCR
                     detections = self.reader.readtext(
                         img_array,
                         paragraph=False,
-                        width_ths=0.7,  # Увеличено для объединения слов
-                        height_ths=0.7,
-                        ycenter_ths=0.5,
-                        add_margin=0.15,  # Увеличен отступ
-                        text_threshold=0.3,  # Снижен порог текста (по умолчанию 0.7)
-                        low_text=0.3,  # Снижен порог для низкого текста
-                        link_threshold=0.3,  # Снижен порог связи
-                        mag_ratio=1.5  # Увеличение масштаба для мелкого текста
+                        width_ths=0.7,
+                        height_ths=0.7
                     )
-
-                    print(f"[OCR] Вариант {idx}: найдено {len(detections)} детекций")
 
                     for detection in detections:
                         bbox, text, confidence = detection
                         text_clean = text.strip()
                         text_lower = text_clean.lower()
 
-                        # Сохраняем для диагностики
-                        all_raw_detections.append({
-                            'variant': idx,
-                            'text': text_clean,
-                            'confidence': confidence,
-                            'accepted': False
-                        })
-
-                        print(f"[OCR]   - '{text_clean}' (conf={confidence:.2f})")
-
                         # Дедупликация
                         if text_lower in found_texts:
                             continue
 
-                        # БОЛЕЕ МЯГКИЕ критерии фильтрации для логотипов
-                        # Снижен порог уверенности до 20% для стилизованных шрифтов
+                        # Фильтрация
                         is_valid_text = (
-                            confidence > 0.20 and  # Очень низкий порог для логотипов
-                            len(text_clean) >= 2 and  # Минимум 2 символа
-                            any(c.isalpha() for c in text_clean)  # Должны быть буквы
+                            confidence > 0.30 and
+                            len(text_clean) >= 2 and
+                            any(c.isalpha() for c in text_clean)
                         )
 
-                        # Дополнительная проверка на мусор только если текст прошёл базовую
                         if is_valid_text and len(text_clean) > 3:
                             is_valid_text = not self._is_garbage_text(text_clean)
 
                         if is_valid_text:
                             found_texts.add(text_lower)
-                            all_raw_detections[-1]['accepted'] = True
-
-                            # bbox = [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
                             x1, y1 = bbox[0]
                             x2, y2 = bbox[2]
 
@@ -249,24 +219,12 @@ class OCRProcessor:
                                 },
                                 language=self._detect_language(text_clean)
                             ))
-                            print(f"[OCR]   ✓ Принято: '{text_clean}'")
-                        else:
-                            print(f"[OCR]   ✗ Отклонено: '{text_clean}' (conf={confidence:.2f}, len={len(text_clean)})")
 
                 except Exception as e:
-                    print(f"[OCR] Ошибка для варианта {idx}: {e}")
-                    import traceback
-                    traceback.print_exc()
                     continue
 
-            # Диагностика
-            print(f"[OCR] Всего сырых детекций: {len(all_raw_detections)}")
-            print(f"[OCR] Принято текстов: {len(results)}")
-
         except Exception as e:
-            print(f"[OCR] Критическая ошибка EasyOCR: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[OCR] Ошибка: {e}")
 
         # Сортируем по уверенности
         results.sort(key=lambda x: x.confidence, reverse=True)
@@ -275,15 +233,13 @@ class OCRProcessor:
     def _preprocess_image(self, image_path: str) -> List[Image.Image]:
         """
         Предобработка изображения для улучшения OCR
-        Возвращает список ОПТИМИЗИРОВАННЫХ вариантов изображения для распознавания
-        Сокращено до 6 наиболее эффективных вариантов
+        БЫСТРАЯ версия - только 2 варианта
         """
         img = Image.open(image_path)
         variants = []
 
         try:
-            from PIL import ImageEnhance, ImageFilter, ImageOps
-            import numpy as np
+            from PIL import ImageEnhance
 
             # Конвертируем в RGB если нужно
             if img.mode != 'RGB':
@@ -292,55 +248,16 @@ class OCRProcessor:
                 img_rgb = img
 
             width, height = img_rgb.size
-            print(f"[Preprocess] Оригинал: {width}x{height}")
 
-            # === ОПТИМИЗИРОВАННЫЙ НАБОР (6 вариантов) ===
-
-            # 1. Увеличенный оригинал (критично для мелкого текста!)
-            scale = max(2, 1500 // max(width, height))
-            large = img_rgb.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
-            variants.append(large)
-
-            # 2. Увеличенный + контраст (основной вариант)
-            large_contrast = ImageEnhance.Contrast(large).enhance(2.0)
-            variants.append(large_contrast)
-
-            # 3. Оригинал (для качественных изображений)
+            # 1. Оригинал (для качественных изображений)
             variants.append(img_rgb)
 
-            # 4. Инверсия увеличенная (для светлого текста на тёмном фоне)
-            inverted_large = ImageOps.invert(large)
-            variants.append(inverted_large)
-
-            # 5. Выделение цветного текста по насыщенности
-            try:
-                img_np = np.array(img_rgb)
-                r_ch, g_ch, b_ch = img_np[:,:,0], img_np[:,:,1], img_np[:,:,2]
-
-                max_rgb = np.maximum(np.maximum(r_ch, g_ch), b_ch)
-                min_rgb = np.minimum(np.minimum(r_ch, g_ch), b_ch)
-                saturation = np.where(max_rgb == 0, 0, (max_rgb - min_rgb) / max_rgb * 255).astype(np.uint8)
-
-                # Маска цветного текста
-                color_mask = saturation > 35
-                result = np.where(color_mask, 0, 255).astype(np.uint8)
-                color_text_img = Image.fromarray(result, mode='L')
-                ct_large = color_text_img.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
-                variants.append(ct_large.convert('RGB'))
-            except:
-                # Fallback: серое увеличенное
-                gray_large = img_rgb.convert('L').resize((width * scale, height * scale), Image.Resampling.LANCZOS)
-                variants.append(gray_large.convert('RGB'))
-
-            # 6. Высокий контраст оригинала
-            high_contrast = ImageEnhance.Contrast(img_rgb).enhance(2.5)
+            # 2. Контраст (основной вариант для логотипов)
+            high_contrast = ImageEnhance.Contrast(img_rgb).enhance(2.0)
             variants.append(high_contrast)
 
-            print(f"[Preprocess] Создано {len(variants)} оптимизированных вариантов")
-
         except Exception as e:
-            print(f"[Preprocess] Ошибка предобработки: {e}")
-            # Возвращаем хотя бы оригинал
+            print(f"[Preprocess] Ошибка: {e}")
             if not variants:
                 variants = [img]
 
@@ -453,33 +370,12 @@ class OCRProcessor:
         return results
 
     def extract_text(self, image_path: str) -> List[TextOnImage]:
-        """Извлечение текста (использует все доступные OCR движки и комбинирует результаты)"""
-        all_results = []
-        found_texts = set()
-
-        # Пробуем EasyOCR (обычно лучше для разных шрифтов)
-        easyocr_results = self.extract_text_easyocr(image_path)
-        for r in easyocr_results:
-            text_lower = r.text.lower()
-            if text_lower not in found_texts:
-                found_texts.add(text_lower)
-                all_results.append(r)
-        print(f"[OCR] EasyOCR: {len(easyocr_results)} текстов")
-
-        # Также пробуем Tesseract для дополнительного покрытия
-        tesseract_results = self.extract_text_tesseract(image_path)
-        for r in tesseract_results:
-            text_lower = r.text.lower()
-            if text_lower not in found_texts:
-                found_texts.add(text_lower)
-                all_results.append(r)
-        print(f"[OCR] Tesseract: {len(tesseract_results)} текстов")
+        """Извлечение текста - БЫСТРАЯ версия (только EasyOCR)"""
+        # Только EasyOCR для скорости
+        results = self.extract_text_easyocr(image_path)
 
         # Объединяем близко расположенный текст
-        merged = self._merge_nearby_text(all_results)
-        print(f"[OCR] После объединения: {len(merged)} текстов")
-
-        return merged
+        return self._merge_nearby_text(results)
 
     def _is_garbage_text(self, text: str) -> bool:
         """

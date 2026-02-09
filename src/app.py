@@ -1137,20 +1137,25 @@ def export_image_to_pdf(check: Dict) -> str:
 
 
 def export_name_to_excel(check: Dict) -> str:
-    """Экспорт проверки наименования в Excel"""
+    """Экспорт проверки наименования в Excel с найденными ТЗ"""
     import openpyxl
-    from openpyxl.styles import Font, PatternFill
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Отчёт проверки"
 
     header_font = Font(bold=True, size=14)
+    table_header_font = Font(bold=True, size=11)
     status_fills = {
         'red': PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid"),
         'yellow': PatternFill(start_color="FFE66D", end_color="FFE66D", fill_type="solid"),
         'green': PatternFill(start_color="6BCB77", end_color="6BCB77", fill_type="solid")
     }
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
 
     row = 1
 
@@ -1176,7 +1181,7 @@ def export_name_to_excel(check: Dict) -> str:
     cell.fill = status_fills.get(status, status_fills['green'])
     row += 2
 
-    # Результаты проверки
+    # Результаты проверки (краткая информация)
     ws.cell(row=row, column=1, value="РЕЗУЛЬТАТЫ ПРОВЕРКИ").font = header_font
     row += 1
     results = check.get('results', [])
@@ -1184,6 +1189,33 @@ def export_name_to_excel(check: Dict) -> str:
         ws.cell(row=row, column=1, value=r.get('resource', '-'))
         ws.cell(row=row, column=2, value=r.get('notes', '-'))
         row += 1
+    row += 1
+
+    # НАЙДЕННЫЕ ТОВАРНЫЕ ЗНАКИ (таблица)
+    ws.cell(row=row, column=1, value="НАЙДЕННЫЕ ТОВАРНЫЕ ЗНАКИ").font = header_font
+    row += 1
+
+    # Заголовки таблицы
+    headers = ['№ свид.', 'Название/Слова', 'МКТУ', 'Статус', 'Сходство']
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=col, value=header)
+        cell.font = table_header_font
+        cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        cell.border = thin_border
+    row += 1
+
+    # Данные о найденных ТЗ
+    for r in results:
+        matches = r.get('matches', [])
+        for match in matches:
+            ws.cell(row=row, column=1, value=match.get('registration_number', '-')).border = thin_border
+            ws.cell(row=row, column=2, value=match.get('text', '-')[:50]).border = thin_border
+            ws.cell(row=row, column=3, value=match.get('classes_str', '-')).border = thin_border
+            ws.cell(row=row, column=4, value=match.get('status', '-')).border = thin_border
+            score = match.get('similarity_score', 0)
+            ws.cell(row=row, column=5, value=f"{int(score * 100)}%").border = thin_border
+            row += 1
+
     row += 1
 
     # Ссылки для проверки
@@ -1195,8 +1227,11 @@ def export_name_to_excel(check: Dict) -> str:
         ws.cell(row=row, column=2, value=url)
         row += 1
 
-    ws.column_dimensions['A'].width = 40
-    ws.column_dimensions['B'].width = 60
+    ws.column_dimensions['A'].width = 15
+    ws.column_dimensions['B'].width = 50
+    ws.column_dimensions['C'].width = 15
+    ws.column_dimensions['D'].width = 15
+    ws.column_dimensions['E'].width = 12
 
     output_path = OUTPUT_DIR / f"report_name_{check.get('id', 'unknown')}.xlsx"
     wb.save(str(output_path))
@@ -1204,7 +1239,7 @@ def export_name_to_excel(check: Dict) -> str:
 
 
 def export_name_to_pdf(check: Dict) -> str:
-    """Экспорт проверки наименования в PDF"""
+    """Экспорт проверки наименования в PDF с найденными ТЗ"""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1213,55 +1248,97 @@ def export_name_to_pdf(check: Dict) -> str:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    try:
-        pdfmetrics.registerFont(TTFont('DejaVu', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
-        font_name = 'DejaVu'
-    except:
-        font_name = 'Helvetica'
+    # Пробуем загрузить шрифт с поддержкой кириллицы
+    font_name = 'Helvetica'
+    font_paths = [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/System/Library/Fonts/Helvetica.ttc',
+        '/Library/Fonts/Arial Unicode.ttf',
+        '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+    ]
+    for font_path in font_paths:
+        try:
+            if 'DejaVu' in font_path:
+                pdfmetrics.registerFont(TTFont('DejaVu', font_path))
+                font_name = 'DejaVu'
+                break
+        except:
+            continue
 
     output_path = OUTPUT_DIR / f"report_name_{check.get('id', 'unknown')}.pdf"
     doc = SimpleDocTemplate(str(output_path), pagesize=A4,
-                           rightMargin=2*cm, leftMargin=2*cm,
+                           rightMargin=1.5*cm, leftMargin=1.5*cm,
                            topMargin=2*cm, bottomMargin=2*cm)
 
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='RuTitle', fontName=font_name, fontSize=18, spaceAfter=20))
-    styles.add(ParagraphStyle(name='RuHeading', fontName=font_name, fontSize=14, spaceAfter=10, spaceBefore=15))
-    styles.add(ParagraphStyle(name='RuNormal', fontName=font_name, fontSize=11, spaceAfter=5))
+    styles.add(ParagraphStyle(name='RuTitle', fontName=font_name, fontSize=16, spaceAfter=20))
+    styles.add(ParagraphStyle(name='RuHeading', fontName=font_name, fontSize=12, spaceAfter=10, spaceBefore=15))
+    styles.add(ParagraphStyle(name='RuNormal', fontName=font_name, fontSize=10, spaceAfter=5))
 
     story = []
 
+    # Заголовок (транслит для совместимости)
     story.append(Paragraph("OTCHET O PROVERKE NAIMENOVANIYA", styles['RuTitle']))
     story.append(Spacer(1, 0.5*cm))
 
     status = check.get('overall_status', 'green')
-    status_text = {'red': 'ZAPRESHCHENO', 'yellow': 'TREBUET PROVERKI', 'green': 'RAZRESHENO'}.get(status, status)
+    status_text = {'red': 'RISK', 'yellow': 'WARNING', 'green': 'OK'}.get(status, status)
     status_color = {'red': colors.red, 'yellow': colors.yellow, 'green': colors.green}.get(status, colors.green)
 
+    # Основная информация
     data = [
-        ['Tekst:', check.get('query_text', '-')],
-        ['Klassy MKTU:', ', '.join(map(str, check.get('mktu_classes', []))) or '-'],
-        ['Data:', check.get('created_at', '-')],
+        ['Query:', check.get('query_text', '-')],
+        ['MKTU:', ', '.join(map(str, check.get('mktu_classes', []))) or '-'],
+        ['Date:', check.get('created_at', '-')],
         ['Status:', status_text],
     ]
-    t = Table(data, colWidths=[4*cm, 12*cm])
+    t = Table(data, colWidths=[3*cm, 14*cm])
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
-        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('BACKGROUND', (1, 3), (1, 3), status_color),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
     story.append(t)
     story.append(Spacer(1, 0.5*cm))
 
-    story.append(Paragraph("Rezultaty proverki:", styles['RuHeading']))
+    # Найденные товарные знаки
+    story.append(Paragraph("FOUND TRADEMARKS:", styles['RuHeading']))
     results = check.get('results', [])
-    for r in results:
-        story.append(Paragraph(f"• {r.get('resource', '-')}: {r.get('notes', '-')}", styles['RuNormal']))
 
-    story.append(Paragraph("Ssylki dlya proverki:", styles['RuHeading']))
+    for r in results:
+        matches = r.get('matches', [])
+        if matches:
+            # Заголовок таблицы
+            tm_data = [['Reg.#', 'Name', 'MKTU', 'Status', 'Similarity']]
+            for match in matches[:15]:  # Максимум 15 записей
+                tm_data.append([
+                    match.get('registration_number', '-'),
+                    (match.get('text', '-')[:40] + '...') if len(match.get('text', '')) > 40 else match.get('text', '-'),
+                    match.get('classes_str', '-'),
+                    match.get('status', '-'),
+                    f"{int(match.get('similarity_score', 0) * 100)}%"
+                ])
+
+            tm_table = Table(tm_data, colWidths=[2*cm, 7*cm, 2.5*cm, 2.5*cm, 2*cm])
+            tm_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), font_name),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(tm_table)
+        else:
+            story.append(Paragraph(f"- {r.get('resource', '-')}: {r.get('notes', '-')}", styles['RuNormal']))
+
+    story.append(Spacer(1, 0.5*cm))
+
+    # Ссылки
+    story.append(Paragraph("Manual check links:", styles['RuHeading']))
     links = check.get('manual_links', {})
     for name, url in links.items():
-        story.append(Paragraph(f"• {name}: {url}", styles['RuNormal']))
+        story.append(Paragraph(f"- {name}: {url}", styles['RuNormal']))
 
     doc.build(story)
     return str(output_path)

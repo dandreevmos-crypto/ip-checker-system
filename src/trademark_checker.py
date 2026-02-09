@@ -784,8 +784,32 @@ class LinkmarkChecker(TrademarkChecker):
                         result.registration_numbers.append(reg_number)
 
         # Формируем итоговые результаты
-        # Сортируем по схожести (от большей к меньшей)
-        results_in_mktu.sort(key=lambda x: x['similarity_score'], reverse=True)
+        # Сортировка: 1) по схожести (полные совпадения первыми), 2) действующие первыми, 3) истёкшие последними
+        def sort_key(x):
+            # Схожесть: полные совпадения (>= 0.9) получают приоритет 0
+            similarity = x.get('similarity_score', 0)
+            if similarity >= 0.9:
+                similarity_priority = 0
+            elif similarity >= 0.7:
+                similarity_priority = 1
+            else:
+                similarity_priority = 2
+
+            # Статус: "действует" = 0 (первые), "истёк"/"не действует" = 1 (последние)
+            status_lower = x.get('status', '').lower()
+            if status_lower in ['действует', 'действующий']:
+                status_priority = 0
+            elif 'истёк' in status_lower or 'истек' in status_lower or 'не действует' in status_lower:
+                status_priority = 2  # В самый конец
+            else:
+                status_priority = 1
+
+            # Детальная схожесть для вторичной сортировки (инвертируем)
+            detail_similarity = 1 - similarity
+
+            return (similarity_priority, status_priority, detail_similarity)
+
+        results_in_mktu.sort(key=sort_key)
         print(f"[Linkmark] results_in_mktu: {len(results_in_mktu)}, results_outside_mktu: {len(results_outside_mktu)}")
         result.found_matches = results_in_mktu[:15]  # Показываем до 15 результатов
         print(f"[Linkmark] result.found_matches: {len(result.found_matches)}")
