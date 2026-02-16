@@ -19,9 +19,13 @@ env/
 Thumbs.db
 
 # Project specific
-data/
+data/uploads/
+data/history/
 output/
 *.log
+cloudflared*.log
+tunnel.log
+server.log
 
 # Environment
 .env

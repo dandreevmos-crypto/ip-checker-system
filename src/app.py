@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any
 
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
@@ -185,6 +185,393 @@ def upload_images():
         })
 
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/check/folder', methods=['POST'])
+def check_folder():
+    """Проверка всех изображений из папки с формированием Excel-отчёта"""
+    data = request.json
+    folder_path = data.get('folder_path', '').strip()
+
+    if not folder_path:
+        return jsonify({'error': 'Путь к папке не указан'}), 400
+
+    folder = Path(folder_path)
+    if not folder.exists():
+        return jsonify({'error': f'Папка не найдена: {folder_path}'}), 404
+
+    if not folder.is_dir():
+        return jsonify({'error': f'Это не папка: {folder_path}'}), 400
+
+    # Находим все изображения
+    image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+    image_files = [f for f in folder.iterdir()
+                   if f.is_file() and f.suffix.lower() in image_extensions]
+
+    if not image_files:
+        return jsonify({'error': 'В папке нет изображений'}), 400
+
+    def generate():
+        results = []
+        stats = {'total': len(image_files), 'red': 0, 'yellow': 0, 'green': 0}
+
+        for i, image_file in enumerate(image_files):
+            # Отправляем прогресс
+            yield f"data: {json.dumps({'type': 'progress', 'current': i + 1, 'total': len(image_files), 'filename': image_file.name})}\n\n"
+
+            try:
+                # Проверяем изображение
+                check_result = image_checker.check_image(str(image_file))
+
+                # Определяем статус
+                status = 'green'
+                risk_factors = check_result.get('risk_factors', [])
+                recognized_texts = check_result.get('recognized_texts', [])
+
+                # Проверяем распознанный текст на товарные знаки
+                trademark_matches = []
+                for text_item in recognized_texts:
+                    text = text_item.text if hasattr(text_item, 'text') else str(text_item)
+                    if text and len(text) > 2:
+                        tm_results = trademark_checker.check_all(text, [])
+                        if tm_results:
+                            trademark_matches.extend(tm_results)
+                            # Добавляем риск если найдены совпадения
+                            for tm in tm_results:
+                                if tm.get('exact_match') or tm.get('similarity_score', 0) > 0.8:
+                                    status = 'red'
+                                    risk_factors.append({
+                                        'severity': 'red',
+                                        'message': f"Найден ТЗ: {tm.get('name', text)}"
+                                    })
+                                elif tm.get('similarity_score', 0) > 0.5:
+                                    if status != 'red':
+                                        status = 'yellow'
+
+                # Поиск похожих изображений в интернете
+                found_products = []
+                try:
+                    print(f"[check_folder] Поиск изображений для {image_file.name}...")
+                    search_results = image_searcher.search_all(str(image_file), use_api=True)
+                    print(f"[check_folder] Получено {len(search_results)} результатов поиска")
+
+                    for sr in search_results:
+                        print(f"[check_folder] Ресурс: {sr.resource_name}, similar_images: {len(sr.similar_images) if sr.similar_images else 0}")
+                        if sr.similar_images:
+                            for img in sr.similar_images[:5]:
+                                print(f"[check_folder] Найден товар: {img.get('title', 'N/A')[:30]}, link: {img.get('link', 'N/A')[:50]}")
+                                if img.get('link') and img.get('link') not in [p.get('link') for p in found_products]:
+                                    found_products.append({
+                                        'title': img.get('title', 'Товар')[:50],
+                                        'link': img.get('link'),
+                                        'source': img.get('source', '')
+                                    })
+                                if len(found_products) >= 5:
+                                    break
+                        if len(found_products) >= 5:
+                            break
+
+                    print(f"[check_folder] Итого found_products: {len(found_products)}")
+
+                    # Добавляем риск если много совпадений
+                    if len(found_products) > 0:
+                        total_found = sum(sr.total_results for sr in search_results)
+                        if total_found > 50:
+                            risk_factors.append({
+                                'severity': 'yellow',
+                                'message': f'Найдено {total_found} похожих изображений'
+                            })
+                except Exception as e:
+                    import traceback
+                    print(f"[check_folder] Ошибка поиска изображений для {image_file.name}: {e}")
+                    print(traceback.format_exc())
+
+                # Обновляем статус на основе рисков
+                for risk in risk_factors:
+                    severity = risk.get('severity', 'yellow')
+                    if severity == 'red':
+                        status = 'red'
+                        break
+                    elif severity == 'yellow' and status == 'green':
+                        status = 'yellow'
+
+                stats[status] += 1
+
+                results.append({
+                    'filename': image_file.name,
+                    'filepath': str(image_file),
+                    'status': status,
+                    'recognized_texts': [
+                        {'text': t.text if hasattr(t, 'text') else str(t),
+                         'confidence': t.confidence if hasattr(t, 'confidence') else 0}
+                        for t in recognized_texts
+                    ],
+                    'risk_factors': risk_factors,
+                    'trademark_matches': trademark_matches,
+                    'found_products': found_products
+                })
+
+            except Exception as e:
+                stats['yellow'] += 1
+                results.append({
+                    'filename': image_file.name,
+                    'filepath': str(image_file),
+                    'status': 'yellow',
+                    'recognized_texts': [],
+                    'risk_factors': [{'severity': 'yellow', 'message': f'Ошибка проверки: {str(e)}'}],
+                    'trademark_matches': [],
+                    'found_products': []
+                })
+
+        # Создаём Excel-отчёт
+        try:
+            excel_filename = f"batch_check_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            excel_path = OUTPUT_DIR / excel_filename
+
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Результаты проверки"
+
+            # Стили
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            red_fill = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")
+            yellow_fill = PatternFill(start_color="FFE066", end_color="FFE066", fill_type="solid")
+            green_fill = PatternFill(start_color="69DB7C", end_color="69DB7C", fill_type="solid")
+            thin_border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
+
+            # Заголовок отчёта
+            ws['A1'] = f"Отчёт проверки изображений из папки"
+            ws['A1'].font = Font(bold=True, size=14)
+            ws['A2'] = f"Папка: {folder_path}"
+            ws['A3'] = f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            ws['A4'] = f"Всего файлов: {stats['total']} | Запрещено: {stats['red']} | Внимание: {stats['yellow']} | Разрешено: {stats['green']}"
+
+            # Заголовки таблицы
+            headers = ['№', 'Файл', 'Статус', 'Распознанный текст', 'Найденные ТЗ', 'Риски', 'Найденные товары (ссылки)']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=6, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal='center')
+                cell.border = thin_border
+
+            # Данные
+            for row_idx, result in enumerate(results, 7):
+                ws.cell(row=row_idx, column=1, value=row_idx - 6).border = thin_border
+                ws.cell(row=row_idx, column=2, value=result['filename']).border = thin_border
+
+                status_cell = ws.cell(row=row_idx, column=3,
+                    value='ЗАПРЕЩЕНО' if result['status'] == 'red' else 'ВНИМАНИЕ' if result['status'] == 'yellow' else 'РАЗРЕШЕНО')
+                status_cell.border = thin_border
+                if result['status'] == 'red':
+                    status_cell.fill = red_fill
+                elif result['status'] == 'yellow':
+                    status_cell.fill = yellow_fill
+                else:
+                    status_cell.fill = green_fill
+
+                texts = ', '.join([t.get('text', '') for t in result['recognized_texts']]) or '-'
+                ws.cell(row=row_idx, column=4, value=texts).border = thin_border
+
+                tm_names = ', '.join([tm.get('name', '') for tm in result.get('trademark_matches', [])]) or '-'
+                ws.cell(row=row_idx, column=5, value=tm_names).border = thin_border
+
+                risks = '; '.join([r.get('message', '') for r in result['risk_factors']]) or '-'
+                ws.cell(row=row_idx, column=6, value=risks).border = thin_border
+
+                # Найденные товары (ссылки)
+                products = result.get('found_products', [])
+                if products:
+                    product_links = '\n'.join([f"{p.get('title', 'Товар')}: {p.get('link', '')}" for p in products[:5]])
+                else:
+                    product_links = '-'
+                products_cell = ws.cell(row=row_idx, column=7, value=product_links)
+                products_cell.border = thin_border
+                products_cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+            # Ширина колонок
+            ws.column_dimensions['A'].width = 5
+            ws.column_dimensions['B'].width = 30
+            ws.column_dimensions['C'].width = 12
+            ws.column_dimensions['D'].width = 30
+            ws.column_dimensions['E'].width = 30
+            ws.column_dimensions['F'].width = 40
+            ws.column_dimensions['G'].width = 50
+
+            wb.save(excel_path)
+            excel_url = f'/api/download/{excel_filename}'
+
+        except Exception as e:
+            excel_url = None
+            print(f"Ошибка создания Excel: {e}")
+
+        # Отправляем результат
+        yield f"data: {json.dumps({'type': 'complete', 'results': results, 'statistics': stats, 'excel_url': excel_url}, ensure_ascii=False)}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.route('/api/download/<filename>')
+def download_file(filename):
+    """Скачивание файла из папки output"""
+    file_path = OUTPUT_DIR / secure_filename(filename)
+    if file_path.exists():
+        return send_file(file_path, as_attachment=True)
+    return jsonify({'error': 'Файл не найден'}), 404
+
+
+@app.route('/api/export/batch', methods=['POST'])
+def export_batch_results():
+    """Создание Excel-отчёта из результатов пакетной проверки с миниатюрами"""
+    data = request.json
+    results = data.get('results', [])
+    stats = data.get('statistics', {})
+    image_data_list = data.get('images', [])  # Base64 данные изображений
+
+    try:
+        excel_filename = f"batch_check_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        excel_path = OUTPUT_DIR / excel_filename
+
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.drawing.image import Image as XLImage
+        from PIL import Image as PILImage
+        import io
+        import base64
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Результаты проверки"
+
+        # Стили
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        red_fill = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")
+        yellow_fill = PatternFill(start_color="FFE066", end_color="FFE066", fill_type="solid")
+        green_fill = PatternFill(start_color="69DB7C", end_color="69DB7C", fill_type="solid")
+        thin_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+
+        # Заголовок отчёта
+        ws['A1'] = "Отчёт пакетной проверки изображений"
+        ws['A1'].font = Font(bold=True, size=14)
+        ws['A2'] = f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        ws['A3'] = f"Всего файлов: {stats.get('total', 0)} | Запрещено: {stats.get('red', 0)} | Внимание: {stats.get('yellow', 0)} | Разрешено: {stats.get('green', 0)}"
+
+        # Заголовки таблицы (добавлена колонка Изображение и Найденные товары)
+        headers = ['№', 'Изображение', 'Файл', 'Статус', 'Распознанный текст', 'Найденные ТЗ', 'Риски', 'Найденные товары']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=5, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = thin_border
+
+        # Данные
+        row_height = 80  # Высота строки для изображения
+        for row_idx, result in enumerate(results, 6):
+            ws.row_dimensions[row_idx].height = row_height
+
+            ws.cell(row=row_idx, column=1, value=row_idx - 5).border = thin_border
+            ws.cell(row=row_idx, column=1).alignment = Alignment(vertical='center')
+
+            # Добавляем миниатюру изображения
+            if row_idx - 6 < len(image_data_list) and image_data_list[row_idx - 6]:
+                try:
+                    img_data = image_data_list[row_idx - 6]
+                    # Убираем префикс data:image/...;base64, если есть
+                    if ',' in img_data:
+                        img_data = img_data.split(',')[1]
+                    img_bytes = base64.b64decode(img_data)
+
+                    # Создаём миниатюру
+                    pil_img = PILImage.open(io.BytesIO(img_bytes))
+                    pil_img.thumbnail((100, 100), PILImage.LANCZOS)
+
+                    # Сохраняем во временный буфер
+                    img_buffer = io.BytesIO()
+                    pil_img.save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+
+                    # Добавляем в Excel
+                    xl_img = XLImage(img_buffer)
+                    xl_img.width = 80
+                    xl_img.height = 80
+                    ws.add_image(xl_img, f'B{row_idx}')
+                except Exception as e:
+                    print(f"Ошибка добавления изображения: {e}")
+
+            ws.cell(row=row_idx, column=2).border = thin_border  # Ячейка для изображения
+
+            ws.cell(row=row_idx, column=3, value=result.get('filename', '')).border = thin_border
+            ws.cell(row=row_idx, column=3).alignment = Alignment(vertical='center')
+
+            status = result.get('status', 'green')
+            status_cell = ws.cell(row=row_idx, column=4,
+                value='ЗАПРЕЩЕНО' if status == 'red' else 'ВНИМАНИЕ' if status == 'yellow' else 'РАЗРЕШЕНО')
+            status_cell.border = thin_border
+            status_cell.alignment = Alignment(vertical='center', horizontal='center')
+            if status == 'red':
+                status_cell.fill = red_fill
+            elif status == 'yellow':
+                status_cell.fill = yellow_fill
+            else:
+                status_cell.fill = green_fill
+
+            texts = result.get('recognized_texts', [])
+            texts_str = ', '.join([t.get('text', str(t)) if isinstance(t, dict) else str(t) for t in texts]) or '-'
+            ws.cell(row=row_idx, column=5, value=texts_str).border = thin_border
+            ws.cell(row=row_idx, column=5).alignment = Alignment(vertical='center', wrap_text=True)
+
+            tm = result.get('trademark_matches', [])
+            tm_str = ', '.join([t.get('name', '') for t in tm if isinstance(t, dict)]) or '-'
+            ws.cell(row=row_idx, column=6, value=tm_str).border = thin_border
+            ws.cell(row=row_idx, column=6).alignment = Alignment(vertical='center', wrap_text=True)
+
+            risks = result.get('risk_factors', [])
+            risks_str = '; '.join([r.get('message', str(r)) if isinstance(r, dict) else str(r) for r in risks]) or '-'
+            ws.cell(row=row_idx, column=7, value=risks_str).border = thin_border
+            ws.cell(row=row_idx, column=7).alignment = Alignment(vertical='center', wrap_text=True)
+
+            # Найденные товары (ссылки)
+            products = result.get('found_products', [])
+            if products:
+                products_str = '\n'.join([f"{p.get('title', 'Товар')[:40]}: {p.get('link', '')}" for p in products[:5]])
+            else:
+                products_str = '-'
+            ws.cell(row=row_idx, column=8, value=products_str).border = thin_border
+            ws.cell(row=row_idx, column=8).alignment = Alignment(vertical='center', wrap_text=True)
+
+        # Ширина колонок
+        ws.column_dimensions['A'].width = 5
+        ws.column_dimensions['B'].width = 15  # Для миниатюры
+        ws.column_dimensions['C'].width = 25
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 25
+        ws.column_dimensions['F'].width = 25
+        ws.column_dimensions['G'].width = 35
+        ws.column_dimensions['H'].width = 50
+
+        wb.save(excel_path)
+
+        return jsonify({
+            'success': True,
+            'excel_url': f'/api/download/{excel_filename}'
+        })
+
+    except Exception as e:
+        import traceback
+        print(f"Ошибка создания Excel: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
 

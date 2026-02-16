@@ -1,16 +1,15 @@
 # IP Checker System - Система проверки интеллектуальной собственности
-# Зависимости
+# Оптимизированные зависимости для Render
 
 # Веб-фреймворк
 flask==3.0.0
 flask-cors==4.0.0
+gunicorn==21.2.0
 
 # Работа с изображениями
 Pillow==10.2.0
-opencv-python==4.9.0.80
-imagehash==4.3.1
 
-# OCR для распознавания текста на изображениях
+# OCR для распознавания текста
 pytesseract==0.3.10
 easyocr==1.7.1
 
@@ -18,30 +17,15 @@ easyocr==1.7.1
 requests==2.31.0
 beautifulsoup4==4.12.3
 lxml==5.1.0
-aiohttp==3.9.3
-httpx==0.27.0
 
 # Работа с Excel/CSV
 pandas==2.2.0
 openpyxl==3.1.2
-xlsxwriter==3.1.9
 
 # Работа с данными
 python-dotenv==1.0.1
-pyyaml==6.0.1
-
-# Selenium для автоматизации браузера (для некоторых проверок)
-selenium==4.18.1
-webdriver-manager==4.0.1
-
-# Асинхронность
-asyncio==3.4.3
 
 # Утилиты
-tqdm==4.66.2
 python-dateutil==2.8.2
-Levenshtein==0.25.0
+python-Levenshtein==0.25.1
 transliterate==1.10.2
-
-# Для работы с API
-anthropic==0.18.1

@@ -596,9 +596,76 @@
 
             <!-- Пакетная проверка (несколько изображений) -->
             <div class="tab-pane fade" id="batchMulti" role="tabpanel">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <i class="bi bi-folder me-2"></i>Проверка изображений из папки
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted mb-3">Выберите папку с изображениями. Система автоматически проверит все изображения и сформирует Excel-отчёт.</p>
+
+                        <!-- Способ 1: Выбор папки через диалог -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">Способ 1: Выбрать папку</label>
+                            <div class="d-flex gap-2">
+                                <div class="upload-area flex-grow-1 py-3" id="folderSelectArea" style="cursor: pointer;">
+                                    <i class="bi bi-folder2-open me-2" style="font-size: 24px; color: #4472C4;"></i>
+                                    <span>Нажмите для выбора папки с изображениями</span>
+                                    <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+                                </div>
+                            </div>
+                            <div id="selectedFolderInfo" class="mt-2 text-success" style="display: none;">
+                                <i class="bi bi-check-circle me-1"></i>
+                                <span id="selectedFolderName"></span>
+                            </div>
+                        </div>
+
+                        <div class="text-center text-muted mb-3">— или —</div>
+
+                        <!-- Способ 2: Ввод пути вручную -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Способ 2: Указать путь к папке на сервере</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="folderPath"
+                                       placeholder="/Users/olgaandreeva/Documents/images">
+                                <button class="btn btn-outline-secondary dropdown-toggle" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false">
+                                    <i class="bi bi-clock-history"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end" id="recentFoldersMenu">
+                                    <li><h6 class="dropdown-header">Недавние папки</h6></li>
+                                    <li><a class="dropdown-item" href="#" onclick="setFolderPath('/Users/olgaandreeva/Documents')">📁 Documents</a></li>
+                                    <li><a class="dropdown-item" href="#" onclick="setFolderPath('/Users/olgaandreeva/Downloads')">📁 Downloads</a></li>
+                                    <li><a class="dropdown-item" href="#" onclick="setFolderPath('/Users/olgaandreeva/Pictures')">📁 Pictures</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><a class="dropdown-item text-muted" href="#" onclick="clearRecentFolders()"><i class="bi bi-trash me-1"></i>Очистить историю</a></li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="d-grid">
+                            <button class="btn btn-primary btn-lg" onclick="checkFolderImages()">
+                                <i class="bi bi-search me-1"></i>Проверить изображения
+                            </button>
+                        </div>
+                        <div id="folderProgress" class="mt-3" style="display: none;">
+                            <div class="d-flex align-items-center">
+                                <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                                <span id="folderProgressText">Сканирование папки...</span>
+                            </div>
+                            <div class="progress mt-2" style="height: 20px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                     id="folderProgressBar" style="width: 0%">0%</div>
+                            </div>
+                        </div>
+                        <div id="folderResults" class="mt-3" style="display: none;">
+                            <!-- Результаты проверки папки -->
+                        </div>
+                    </div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
-                        <i class="bi bi-images me-2"></i>Пакетная проверка нескольких изображений
+                        <i class="bi bi-images me-2"></i>Загрузка отдельных изображений
                     </div>
                     <div class="card-body">
                         <div class="upload-area" id="multiImageUploadArea">
@@ -1298,6 +1365,354 @@
             document.getElementById('multiImageResults').style.display = 'none';
         }
 
+        // Выбор папки через input
+        let selectedFolderFiles = [];
+
+        document.getElementById('folderSelectArea').addEventListener('click', () => {
+            document.getElementById('folderInput').click();
+        });
+
+        document.getElementById('folderInput').addEventListener('change', function(e) {
+            const files = Array.from(e.target.files);
+            const imageFiles = files.filter(f =>
+                f.type.startsWith('image/') ||
+                /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(f.name)
+            );
+
+            if (imageFiles.length === 0) {
+                alert('В выбранной папке нет изображений');
+                return;
+            }
+
+            selectedFolderFiles = imageFiles;
+
+            // Показываем информацию о выбранной папке
+            const folderName = files[0]?.webkitRelativePath?.split('/')[0] || 'Выбранная папка';
+            document.getElementById('selectedFolderName').textContent =
+                `${folderName} (${imageFiles.length} изображений)`;
+            document.getElementById('selectedFolderInfo').style.display = 'block';
+
+            // Очищаем поле пути
+            document.getElementById('folderPath').value = '';
+        });
+
+        function setFolderPath(path) {
+            document.getElementById('folderPath').value = path;
+            // Очищаем выбранные файлы
+            selectedFolderFiles = [];
+            document.getElementById('selectedFolderInfo').style.display = 'none';
+            // Сохраняем в историю
+            saveRecentFolder(path);
+        }
+
+        function saveRecentFolder(path) {
+            let recent = JSON.parse(localStorage.getItem('recentFolders') || '[]');
+            recent = recent.filter(p => p !== path);
+            recent.unshift(path);
+            recent = recent.slice(0, 5);
+            localStorage.setItem('recentFolders', JSON.stringify(recent));
+            updateRecentFoldersMenu();
+        }
+
+        function updateRecentFoldersMenu() {
+            const menu = document.getElementById('recentFoldersMenu');
+            const recent = JSON.parse(localStorage.getItem('recentFolders') || '[]');
+
+            let html = '<li><h6 class="dropdown-header">Недавние папки</h6></li>';
+            if (recent.length > 0) {
+                recent.forEach(path => {
+                    const name = path.split('/').pop() || path;
+                    html += `<li><a class="dropdown-item" href="#" onclick="setFolderPath('${path}')">📁 ${name}</a></li>`;
+                });
+            } else {
+                html += '<li><span class="dropdown-item text-muted">Нет недавних папок</span></li>';
+            }
+            html += '<li><hr class="dropdown-divider"></li>';
+            html += '<li><a class="dropdown-item text-muted" href="#" onclick="clearRecentFolders()"><i class="bi bi-trash me-1"></i>Очистить историю</a></li>';
+            menu.innerHTML = html;
+        }
+
+        function clearRecentFolders() {
+            localStorage.removeItem('recentFolders');
+            updateRecentFoldersMenu();
+        }
+
+        // Инициализация меню недавних папок
+        updateRecentFoldersMenu();
+
+        // Проверка изображений из папки
+        async function checkFolderImages() {
+            const folderPath = document.getElementById('folderPath').value.trim();
+
+            // Если есть выбранные файлы через диалог - используем их
+            if (selectedFolderFiles.length > 0) {
+                await checkSelectedFiles(selectedFolderFiles);
+                return;
+            }
+
+            if (!folderPath) {
+                alert('Выберите папку или укажите путь к папке с изображениями');
+                return;
+            }
+
+            // Сохраняем путь в историю
+            saveRecentFolder(folderPath);
+
+            const progressDiv = document.getElementById('folderProgress');
+            const progressBar = document.getElementById('folderProgressBar');
+            const progressText = document.getElementById('folderProgressText');
+            const resultsDiv = document.getElementById('folderResults');
+
+            progressDiv.style.display = 'block';
+            resultsDiv.style.display = 'none';
+            progressText.textContent = 'Сканирование папки...';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+
+            try {
+                const response = await fetch('/api/check/folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder_path: folderPath })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.type === 'progress') {
+                                    const percent = Math.round((data.current / data.total) * 100);
+                                    progressBar.style.width = percent + '%';
+                                    progressBar.textContent = percent + '%';
+                                    progressText.textContent = `Проверка: ${data.filename} (${data.current}/${data.total})`;
+                                } else if (data.type === 'complete') {
+                                    progressDiv.style.display = 'none';
+                                    displayFolderResults(data);
+                                } else if (data.type === 'error') {
+                                    progressDiv.style.display = 'none';
+                                    alert('Ошибка: ' + data.message);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                }
+            } catch (error) {
+                progressDiv.style.display = 'none';
+                alert('Ошибка: ' + error.message);
+            }
+        }
+
+        // Конвертация файла в base64 для миниатюры
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // Проверка файлов, выбранных через диалог
+        async function checkSelectedFiles(files) {
+            const progressDiv = document.getElementById('folderProgress');
+            const progressBar = document.getElementById('folderProgressBar');
+            const progressText = document.getElementById('folderProgressText');
+            const resultsDiv = document.getElementById('folderResults');
+
+            progressDiv.style.display = 'block';
+            resultsDiv.style.display = 'none';
+
+            let results = [];
+            let images = [];  // Base64 изображения для Excel
+            let stats = { total: files.length, red: 0, yellow: 0, green: 0 };
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const percent = Math.round(((i + 1) / files.length) * 100);
+                progressBar.style.width = percent + '%';
+                progressBar.textContent = percent + '%';
+                progressText.textContent = `Проверка: ${file.name} (${i + 1}/${files.length})`;
+
+                // Получаем base64 для превью
+                let imageBase64 = '';
+                try {
+                    imageBase64 = await fileToBase64(file);
+                } catch (e) {
+                    console.log('Ошибка конвертации изображения:', e);
+                }
+                images.push(imageBase64);
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch('/api/check/image', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+
+                    const status = data.overall_status || 'green';
+                    stats[status]++;
+
+                    // Извлекаем найденные товары из image_search_results
+                    let found_products = [];
+                    if (data.image_search_results && data.image_search_results.length > 0) {
+                        for (const sr of data.image_search_results) {
+                            if (sr.similar_images && sr.similar_images.length > 0) {
+                                for (const img of sr.similar_images) {
+                                    if (img.link && found_products.length < 5) {
+                                        found_products.push({
+                                            title: (img.title || 'Товар').substring(0, 50),
+                                            link: img.link,
+                                            source: img.source || ''
+                                        });
+                                    }
+                                }
+                            }
+                            if (found_products.length >= 5) break;
+                        }
+                    }
+
+                    results.push({
+                        filename: file.name,
+                        status: status,
+                        recognized_texts: data.recognized_texts || [],
+                        risk_factors: data.risk_factors || [],
+                        trademark_matches: data.trademark_results || [],
+                        thumbnail: imageBase64,  // Для отображения на странице
+                        found_products: found_products
+                    });
+                } catch (error) {
+                    stats.yellow++;
+                    results.push({
+                        filename: file.name,
+                        status: 'yellow',
+                        recognized_texts: [],
+                        risk_factors: [{ message: 'Ошибка проверки: ' + error.message }],
+                        trademark_matches: [],
+                        thumbnail: imageBase64,
+                        found_products: []
+                    });
+                }
+            }
+
+            progressDiv.style.display = 'none';
+
+            // Создаём Excel на сервере с изображениями
+            try {
+                const response = await fetch('/api/export/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ results, statistics: stats, images })
+                });
+                const exportData = await response.json();
+
+                displayFolderResults({
+                    results,
+                    statistics: stats,
+                    excel_url: exportData.excel_url
+                });
+            } catch (e) {
+                displayFolderResults({ results, statistics: stats, excel_url: null });
+            }
+
+            // Очищаем выбор
+            selectedFolderFiles = [];
+            document.getElementById('selectedFolderInfo').style.display = 'none';
+            document.getElementById('folderInput').value = '';
+        }
+
+        function displayFolderResults(data) {
+            const resultsDiv = document.getElementById('folderResults');
+            resultsDiv.style.display = 'block';
+
+            const stats = data.statistics;
+            let html = `
+                <div class="alert alert-success">
+                    <h5><i class="bi bi-check-circle me-2"></i>Проверка завершена!</h5>
+                    <p class="mb-2">Проверено изображений: <strong>${stats.total}</strong></p>
+                    <div class="d-flex gap-3 mb-3">
+                        <span class="badge bg-danger fs-6">Запрещено: ${stats.red}</span>
+                        <span class="badge bg-warning text-dark fs-6">Внимание: ${stats.yellow}</span>
+                        <span class="badge bg-success fs-6">Разрешено: ${stats.green}</span>
+                    </div>
+                    <a href="${data.excel_url}" class="btn btn-success">
+                        <i class="bi bi-file-earmark-excel me-1"></i>Скачать отчёт Excel
+                    </a>
+                </div>
+            `;
+
+            // Таблица результатов с миниатюрами
+            if (data.results && data.results.length > 0) {
+                html += `
+                    <div class="table-responsive mt-3">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 80px;">Изображение</th>
+                                    <th>Файл</th>
+                                    <th>Распознанный текст</th>
+                                    <th>Статус</th>
+                                    <th>Риски</th>
+                                    <th style="width: 200px;">Найденные товары</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+                for (const result of data.results) {
+                    const statusClass = result.status === 'red' ? 'danger' : result.status === 'yellow' ? 'warning' : 'success';
+                    const statusText = result.status === 'red' ? 'Запрещено' : result.status === 'yellow' ? 'Внимание' : 'Разрешено';
+                    const texts = result.recognized_texts || [];
+                    const risks = result.risk_factors || [];
+                    const thumbnail = result.thumbnail || '';
+                    const products = result.found_products || [];
+
+                    // Формируем ссылки на товары
+                    let productsHtml = '-';
+                    if (products.length > 0) {
+                        productsHtml = products.slice(0, 5).map((p, i) => {
+                            const title = (p.title || 'Товар').substring(0, 30) + (p.title && p.title.length > 30 ? '...' : '');
+                            return `<a href="${p.link}" target="_blank" class="d-block text-truncate" style="font-size: 11px;" title="${p.title || 'Товар'}">${i+1}. ${title}</a>`;
+                        }).join('');
+                    }
+
+                    html += `
+                        <tr>
+                            <td>
+                                ${thumbnail ? `<img src="${thumbnail}" alt="${result.filename}" style="max-width: 60px; max-height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer;" onclick="showImageModal('${thumbnail}', '${result.filename}')">` : '<span class="text-muted">-</span>'}
+                            </td>
+                            <td><small>${result.filename}</small></td>
+                            <td><small>${texts.map(t => t.text || t).join(', ') || '-'}</small></td>
+                            <td><span class="badge bg-${statusClass}">${statusText}</span></td>
+                            <td><small>${risks.length > 0 ? risks.map(r => r.message || r).join('; ') : '-'}</small></td>
+                            <td>${productsHtml}</td>
+                        </tr>
+                    `;
+                }
+                html += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
+            resultsDiv.innerHTML = html;
+        }
+
         async function checkMultipleImages() {
             if (multiImageFiles.length === 0) {
                 alert('Сначала выберите изображения');
@@ -1381,6 +1796,35 @@
             ` + html;
 
             resultsDiv.innerHTML = html;
+        }
+
+        // Модальное окно для просмотра изображения
+        function showImageModal(src, filename) {
+            // Создаём модальное окно если его ещё нет
+            let modal = document.getElementById('imagePreviewModal');
+            if (!modal) {
+                const modalHtml = `
+                    <div class="modal fade" id="imagePreviewModal" tabindex="-1">
+                        <div class="modal-dialog modal-lg modal-dialog-centered">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="imagePreviewTitle">Изображение</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body text-center p-0">
+                                    <img id="imagePreviewImg" src="" alt="" style="max-width: 100%; max-height: 70vh;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+                modal = document.getElementById('imagePreviewModal');
+            }
+
+            document.getElementById('imagePreviewTitle').textContent = filename;
+            document.getElementById('imagePreviewImg').src = src;
+            new bootstrap.Modal(modal).show();
         }
     </script>
 </body>
