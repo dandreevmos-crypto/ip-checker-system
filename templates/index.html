@@ -619,30 +619,10 @@
                             </div>
                         </div>
 
-                        <div class="text-center text-muted mb-3">— или —</div>
+                        <!-- Скрытое поле для совместимости -->
+                        <input type="hidden" id="folderPath" value="">
 
-                        <!-- Способ 2: Ввод пути вручную -->
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Способ 2: Указать путь к папке на сервере</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control" id="folderPath"
-                                       placeholder="/Users/olgaandreeva/Documents/images">
-                                <button class="btn btn-outline-secondary dropdown-toggle" type="button"
-                                        data-bs-toggle="dropdown" aria-expanded="false">
-                                    <i class="bi bi-clock-history"></i>
-                                </button>
-                                <ul class="dropdown-menu dropdown-menu-end" id="recentFoldersMenu">
-                                    <li><h6 class="dropdown-header">Недавние папки</h6></li>
-                                    <li><a class="dropdown-item" href="#" onclick="setFolderPath('/Users/olgaandreeva/Documents')">📁 Documents</a></li>
-                                    <li><a class="dropdown-item" href="#" onclick="setFolderPath('/Users/olgaandreeva/Downloads')">📁 Downloads</a></li>
-                                    <li><a class="dropdown-item" href="#" onclick="setFolderPath('/Users/olgaandreeva/Pictures')">📁 Pictures</a></li>
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><a class="dropdown-item text-muted" href="#" onclick="clearRecentFolders()"><i class="bi bi-trash me-1"></i>Очистить историю</a></li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <div class="d-grid">
+                        <div class="d-grid mt-3">
                             <button class="btn btn-primary btn-lg" onclick="checkFolderImages()">
                                 <i class="bi bi-search me-1"></i>Проверить изображения
                             </button>
@@ -1392,126 +1372,17 @@
                 `${folderName} (${imageFiles.length} изображений)`;
             document.getElementById('selectedFolderInfo').style.display = 'block';
 
-            // Очищаем поле пути
-            document.getElementById('folderPath').value = '';
         });
-
-        function setFolderPath(path) {
-            document.getElementById('folderPath').value = path;
-            // Очищаем выбранные файлы
-            selectedFolderFiles = [];
-            document.getElementById('selectedFolderInfo').style.display = 'none';
-            // Сохраняем в историю
-            saveRecentFolder(path);
-        }
-
-        function saveRecentFolder(path) {
-            let recent = JSON.parse(localStorage.getItem('recentFolders') || '[]');
-            recent = recent.filter(p => p !== path);
-            recent.unshift(path);
-            recent = recent.slice(0, 5);
-            localStorage.setItem('recentFolders', JSON.stringify(recent));
-            updateRecentFoldersMenu();
-        }
-
-        function updateRecentFoldersMenu() {
-            const menu = document.getElementById('recentFoldersMenu');
-            const recent = JSON.parse(localStorage.getItem('recentFolders') || '[]');
-
-            let html = '<li><h6 class="dropdown-header">Недавние папки</h6></li>';
-            if (recent.length > 0) {
-                recent.forEach(path => {
-                    const name = path.split('/').pop() || path;
-                    html += `<li><a class="dropdown-item" href="#" onclick="setFolderPath('${path}')">📁 ${name}</a></li>`;
-                });
-            } else {
-                html += '<li><span class="dropdown-item text-muted">Нет недавних папок</span></li>';
-            }
-            html += '<li><hr class="dropdown-divider"></li>';
-            html += '<li><a class="dropdown-item text-muted" href="#" onclick="clearRecentFolders()"><i class="bi bi-trash me-1"></i>Очистить историю</a></li>';
-            menu.innerHTML = html;
-        }
-
-        function clearRecentFolders() {
-            localStorage.removeItem('recentFolders');
-            updateRecentFoldersMenu();
-        }
-
-        // Инициализация меню недавних папок
-        updateRecentFoldersMenu();
 
         // Проверка изображений из папки
         async function checkFolderImages() {
-            const folderPath = document.getElementById('folderPath').value.trim();
-
-            // Если есть выбранные файлы через диалог - используем их
-            if (selectedFolderFiles.length > 0) {
-                await checkSelectedFiles(selectedFolderFiles);
+            // Проверяем, что файлы выбраны через диалог
+            if (selectedFolderFiles.length === 0) {
+                alert('Сначала выберите папку с изображениями, нажав на область выше');
                 return;
             }
 
-            if (!folderPath) {
-                alert('Выберите папку или укажите путь к папке с изображениями');
-                return;
-            }
-
-            // Сохраняем путь в историю
-            saveRecentFolder(folderPath);
-
-            const progressDiv = document.getElementById('folderProgress');
-            const progressBar = document.getElementById('folderProgressBar');
-            const progressText = document.getElementById('folderProgressText');
-            const resultsDiv = document.getElementById('folderResults');
-
-            progressDiv.style.display = 'block';
-            resultsDiv.style.display = 'none';
-            progressText.textContent = 'Сканирование папки...';
-            progressBar.style.width = '0%';
-            progressBar.textContent = '0%';
-
-            try {
-                const response = await fetch('/api/check/folder', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder_path: folderPath })
-                });
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.slice(6));
-                                if (data.type === 'progress') {
-                                    const percent = Math.round((data.current / data.total) * 100);
-                                    progressBar.style.width = percent + '%';
-                                    progressBar.textContent = percent + '%';
-                                    progressText.textContent = `Проверка: ${data.filename} (${data.current}/${data.total})`;
-                                } else if (data.type === 'complete') {
-                                    progressDiv.style.display = 'none';
-                                    displayFolderResults(data);
-                                } else if (data.type === 'error') {
-                                    progressDiv.style.display = 'none';
-                                    alert('Ошибка: ' + data.message);
-                                }
-                            } catch (e) {}
-                        }
-                    }
-                }
-            } catch (error) {
-                progressDiv.style.display = 'none';
-                alert('Ошибка: ' + error.message);
-            }
+            await checkSelectedFiles(selectedFolderFiles);
         }
 
         // Конвертация файла в base64 для миниатюры
